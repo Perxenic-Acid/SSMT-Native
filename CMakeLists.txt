@@ -16,24 +16,27 @@ add_subdirectory(3Dmigoto-Injector-V2)
 add_subdirectory(MessageBoxTestDll)
 add_subdirectory(SSMT-Player-Tweaks)
 
-set(SSMT_RESOURCES_DIR
-    "${CMAKE_CURRENT_SOURCE_DIR}/../src-tauri/resources"
+set(SSMT_DIST_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/dist/$<CONFIG>"
 )
 
-add_custom_target(DeploySSMTCpp ALL
+add_custom_target(DeploySSMTNative ALL
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "${SSMT_DIST_DIR}"
+
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "$<TARGET_FILE:3Dmigoto-Injector-V2>"
-        "${SSMT_RESOURCES_DIR}/Run.exe"
+        "${SSMT_DIST_DIR}/Run.exe"
 
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "$<TARGET_FILE:SSMT-Player-Tweaks>"
-        "${SSMT_RESOURCES_DIR}/SSMT-Player-Tweaks.dll"
+        "${SSMT_DIST_DIR}/SSMT-Player-Tweaks.dll"
 
-    COMMENT "Deploying SSMT C++ binaries"
+    COMMENT "Deploying SSMT Native binaries"
 )
 
 add_dependencies(
-    DeploySSMTCpp
+    DeploySSMTNative
     3Dmigoto-Injector-V2
     SSMT-Player-Tweaks
 )
