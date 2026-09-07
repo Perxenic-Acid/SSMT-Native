@@ -1,0 +1,8 @@
+[workspace]
+resolver = "3"
+
+members = [
+    "crates/plugin-api",
+    "crates/test-plugin",
+    "crates/host-probe",
+]

@@ -1,0 +1,10 @@
+[package]
+name = "ssmt-test-plugin"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ssmt-plugin-api = { path = "../plugin-api" }
