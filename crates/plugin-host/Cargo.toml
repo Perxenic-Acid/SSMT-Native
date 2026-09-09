@@ -1,0 +1,15 @@
+[package]
+name = "ssmt-plugin-host"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ssmt-plugin-api = {path = "../plugin-api"}
+
+libloading = "0.9"
+
+[lib]
+crate-type = [
+    "rlib",
+    "cdylib"
+]

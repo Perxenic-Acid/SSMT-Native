@@ -22,13 +22,20 @@ dependencies = [
 name = "ssmt-host-probe"
 version = "0.1.0"
 dependencies = [
- "libloading",
- "ssmt-plugin-api",
+ "ssmt-plugin-host",
 ]
 
 [[package]]
 name = "ssmt-plugin-api"
 version = "0.1.0"
+
+[[package]]
+name = "ssmt-plugin-host"
+version = "0.1.0"
+dependencies = [
+ "libloading",
+ "ssmt-plugin-api",
+]
 
 [[package]]
 name = "ssmt-test-plugin"
