@@ -80,3 +80,35 @@ impl Default for PluginManager {
         Self::new()
     }
 }
+
+impl PluginManager {
+    pub fn load_plugins(
+        &mut self,
+        directory: &Path,
+        plugin_names: &[String],
+    ) {
+        for plugin_name in plugin_names {
+            let path = directory.join(plugin_name);
+
+            println!("Loading plugin: {}", path.display());
+
+            match LoadedPlugin::load(&path) {
+                Ok(plugin) => {
+                    println!(
+                        "Loaded plugin: {} {}",
+                        plugin.metadata().name,
+                        plugin.metadata().version
+                    );
+
+                    self.plugins.push(plugin);
+                }
+                Err(error) => {
+                    eprintln!(
+                        "Failed to load plugin {}: {error}",
+                        path.display()
+                    );
+                }
+            }
+        }
+    }
+}
