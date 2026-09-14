@@ -91,7 +91,9 @@ impl LoadedPlugin {
         }
 
         let shutdown: SsmtPluginShutdownFn = unsafe {
-            *library.get::<SsmtPluginShutdownFn>(b"SSMTPlugin_Shutdown\0")?
+            *library.get::<SsmtPluginShutdownFn>(
+                b"SSMTPlugin_Shutdown\0",
+            )?
         };
 
         Ok(Self {
@@ -109,9 +111,7 @@ impl LoadedPlugin {
 
 impl Drop for LoadedPlugin {
     fn drop(&mut self) {
-        let status = unsafe {
-            (self.shutdown)()
-        };
+        let status = unsafe { (self.shutdown)() };
 
         if status != SSMT_STATUS_OK {
             eprintln!(
@@ -135,29 +135,37 @@ unsafe extern "C" fn host_log(
 
     use crate::color_ansi::*;
 
-    match level {
+    let prefix = match level {
         SSMT_LOG_INFO => {
             println!(
                 "{BOLD}{GREEN}[Info]{RESET} {message}"
             );
+            "[Info]"
         }
 
         SSMT_LOG_WARNING => {
             println!(
                 "{BOLD}{YELLOW}[Warning]{RESET} {message}"
             );
+            "[Warning]"
         }
 
         SSMT_LOG_ERROR => {
             eprintln!(
                 "{BOLD}{RED}[Error]{RESET} {message}"
             );
+            "[Error]"
         }
 
         _ => {
             println!(
                 "{BOLD}{RED}[Unknown Log Type: {level}]{RESET} {message}"
             );
+            "[Unknown]"
         }
-    }
+    };
+
+    crate::logger::write_line(&format!(
+        "{prefix} {message}"
+    ));
 }

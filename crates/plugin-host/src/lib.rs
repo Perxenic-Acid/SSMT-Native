@@ -1,5 +1,6 @@
 mod color_ansi;
 mod config;
+mod logger;
 mod manager;
 mod plugin;
 
@@ -9,7 +10,10 @@ pub use plugin::{LoadedPlugin, PluginMetadata};
 
 use core::ffi::c_void;
 
-use std::sync::{Mutex, OnceLock};
+use std::{
+    path::Path,
+    sync::{Mutex, OnceLock},
+};
 
 use crate::config::HostConfig;
 
@@ -68,6 +72,15 @@ fn start_host(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = HostConfig::load(config_path)?;
 
+    let log_path = config_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("SSMT-PluginHost.log");
+
+    logger::initialize(&log_path)?;
+
+    logger::write_line("[PluginHost] Starting.");
+
     let plugin_directory =
         config.resolve_plugin_directory(config_path);
 
@@ -79,6 +92,10 @@ fn start_host(
     PLUGIN_MANAGER
         .set(Mutex::new(manager))
         .map_err(|_| "PluginHost is already initialized")?;
+
+    logger::write_line(
+        "[PluginHost] Started successfully.",
+    );
 
     Ok(())
 }

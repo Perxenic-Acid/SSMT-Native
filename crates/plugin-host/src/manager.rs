@@ -90,23 +90,26 @@ impl PluginManager {
         for plugin_name in plugin_names {
             let path = directory.join(plugin_name);
 
-            println!("Loading plugin: {}", path.display());
+            crate::logger::write_line(&format!(
+                "[PluginHost] Loading plugin: {}",
+                path.display()
+            ));
 
             match LoadedPlugin::load(&path) {
                 Ok(plugin) => {
-                    println!(
-                        "Loaded plugin: {} {}",
+                    crate::logger::write_line(&format!(
+                        "[PluginHost] Loaded plugin: {} {}",
                         plugin.metadata().name,
-                        plugin.metadata().version
-                    );
+                        plugin.metadata().version,
+                    ));
 
                     self.plugins.push(plugin);
                 }
                 Err(error) => {
-                    eprintln!(
-                        "Failed to load plugin {}: {error}",
+                    crate::logger::write_line(&format!(
+                        "[PluginHost] Failed to load plugin {}: {error}",
                         path.display()
-                    );
+                    ));
                 }
             }
         }

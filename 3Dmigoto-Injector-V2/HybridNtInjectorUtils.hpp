@@ -6,9 +6,12 @@
 #include <tlhelp32.h>
 #include <vector>
 #include <shellapi.h>
+#include <filesystem>
+#include <cstdint>
 
 #include "D3dxIniUtils.hpp"
 #include "InjectorUtils.hpp"
+#include "LoaderOptions.hpp"
 
 typedef NTSTATUS(NTAPI *pNtCreateThreadEx)(PHANDLE, ACCESS_MASK, PVOID, HANDLE, PVOID, PVOID, ULONG, ULONG_PTR, SIZE_T, SIZE_T, PVOID);
 typedef NTSTATUS(NTAPI *pNtAllocateVirtualMemory)(HANDLE, PVOID *, ULONG_PTR, PSIZE_T, ULONG, ULONG);
@@ -32,7 +35,9 @@ inline pNtWriteVirtualMemory ResolveNtWriteVirtualMemory()
 class HybridNtInjectorUtils
 {
 public:
-    static bool Run(D3dxIniUtils &ini)
+    static bool Run(
+        D3dxIniUtils &ini,
+        const LoaderOptions &options)
     {
         printf("[Loader] Starting injection.\n");
         if (ini.launch.empty())
@@ -41,7 +46,10 @@ public:
             return FallbackWaitMode(ini);
         }
 
-        return LaunchAndInject(ini, ini.delay);
+        return LaunchAndInject(
+            ini,
+            options,
+            ini.delay);
     }
 
 private:
@@ -68,7 +76,10 @@ private:
         printf("\n");
     }
 
-    static bool LaunchAndInject(D3dxIniUtils &ini, const std::wstring &delayStr)
+    static bool LaunchAndInject(
+        D3dxIniUtils &ini,
+        const LoaderOptions &options,
+        const std::wstring &delayStr)
     {
         printf("[Loader] Launch-and-inject mode selected.\n");
         HHOOK d3d11Hook = InstallGlobalCbtHook(ini.module.c_str());
@@ -149,7 +160,17 @@ private:
         PROCESS_INFORMATION pi = {};
 
         printf("[Loader] Launching target suspended: %S\n", runPath);
-        if (!CreateProcessW(runPath, cmdBuf.data(), nullptr, nullptr, FALSE, CREATE_SUSPENDED, nullptr, workingDir, &si, &pi))
+        if (!CreateProcessW(
+                runPath,
+                cmdBuf.data(),
+                nullptr,
+                nullptr,
+                FALSE,
+                CREATE_SUSPENDED,
+                nullptr,
+                workingDir,
+                &si,
+                &pi))
         {
             printf("[Loader] CreateProcess failed: %lu\n", GetLastError());
             UnhookWindowsHookEx(d3d11Hook);
@@ -185,6 +206,45 @@ private:
 
             extraOk =
                 extraOk && currentOk;
+        }
+
+        bool pluginHostOk = true;
+
+        if (options.plugin_host_config)
+        {
+            const auto hostPath =
+                GetSiblingPath(L"SSMT-PluginHost.dll");
+
+            if (hostPath.empty() ||
+                !std::filesystem::exists(hostPath))
+            {
+                printf(
+                    "[Loader] PluginHost DLL not found: %S\n",
+                    hostPath.c_str());
+
+                pluginHostOk = false;
+            }
+            else
+            {
+                printf(
+                    "[Loader] Injecting PluginHost: %S\n",
+                    hostPath.c_str());
+
+                pluginHostOk =
+                    NtInjectDll(
+                        pi.hProcess,
+                        hostPath.c_str());
+
+                if (pluginHostOk)
+                {
+                    pluginHostOk =
+                        StartPluginHost(
+                            pi.hProcess,
+                            pi.dwProcessId,
+                            hostPath,
+                            *options.plugin_host_config);
+                }
+            }
         }
 
         const DWORD previousSuspendCount =
@@ -241,7 +301,7 @@ private:
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
 
-        const bool ok = moduleOk && extraOk;
+        const bool ok = moduleOk && extraOk && pluginHostOk;
         AutoExitOrWait(delayStr);
         return ok;
     }
@@ -407,6 +467,241 @@ private:
         return hook;
     }
 
+    static std::filesystem::path GetSiblingPath(
+        const wchar_t *fileName)
+    {
+        wchar_t loaderPath[MAX_PATH]{};
+
+        const DWORD length =
+            GetModuleFileNameW(
+                nullptr,
+                loaderPath,
+                MAX_PATH);
+
+        if (length == 0 || length >= MAX_PATH)
+        {
+            printf(
+                "[Loader] GetModuleFIleNameW failed: %lu\n",
+                GetLastError());
+
+            return {};
+        }
+
+        return std::filesystem::path{
+                   loaderPath}
+                   .parent_path() /
+               fileName;
+    }
+
+    static std::uintptr_t GetExportRva(
+        const std::filesystem::path &dllPath,
+        const char *exportName)
+    {
+        HMODULE module = LoadLibraryW(
+            dllPath.c_str());
+
+        if (!module)
+        {
+            printf(
+                "[Loader] Failed to load local DLL for export lookup: %S, error=%lu\n",
+                dllPath.c_str(),
+                GetLastError());
+
+            return 0;
+        }
+
+        FARPROC proc =
+            GetProcAddress(
+                module,
+                exportName);
+
+        if (!proc)
+        {
+            printf(
+                "[Loader] Export not found: %s, error=%lu\n",
+                exportName,
+                GetLastError());
+
+            FreeLibrary(module);
+            return 0;
+        }
+
+        const auto moduleAddress =
+            reinterpret_cast<std::uintptr_t>(module);
+
+        const auto procAddress =
+            reinterpret_cast<std::uintptr_t>(proc);
+
+        const std::uintptr_t rva =
+            procAddress - moduleAddress;
+
+        FreeLibrary(module);
+
+        return rva;
+    }
+
+    static std::uintptr_t FindRemoteModuleBase(
+        DWORD processId,
+        const std::filesystem::path &modulePath)
+    {
+        const std::wstring moduleName =
+            modulePath.filename().wstring();
+
+        constexpr int maxAttempts = 20;
+
+        for (int attempt = 0;
+             attempt < maxAttempts;
+             ++attempt)
+        {
+            HANDLE snapshot =
+                CreateToolhelp32Snapshot(
+                    TH32CS_SNAPMODULE |
+                        TH32CS_SNAPMODULE32,
+                    processId);
+
+            if (snapshot == INVALID_HANDLE_VALUE)
+            {
+                const DWORD error =
+                    GetLastError();
+
+                if (error == ERROR_BAD_LENGTH)
+                {
+                    Sleep(50);
+                    continue;
+                }
+
+                printf(
+                    "[Loader] Failed to enumerate remote modules: %lu\n",
+                    error);
+
+                return 0;
+            }
+
+            MODULEENTRY32W entry{};
+            entry.dwSize =
+                sizeof(entry);
+
+            if (Module32FirstW(
+                    snapshot,
+                    &entry))
+            {
+                do
+                {
+                    if (_wcsicmp(
+                            entry.szModule,
+                            moduleName.c_str()) == 0)
+                    {
+                        const auto base =
+                            reinterpret_cast<std::uintptr_t>(
+                                entry.modBaseAddr);
+
+                        CloseHandle(snapshot);
+
+                        return base;
+                    }
+                } while (Module32NextW(
+                    snapshot,
+                    &entry));
+            }
+
+            CloseHandle(snapshot);
+
+            Sleep(50);
+        }
+
+        printf(
+            "[Loader] Remote module not found: %S\n",
+            moduleName.c_str());
+
+        return 0;
+    }
+
+    static bool StartPluginHost(
+        HANDLE process,
+        DWORD processId,
+        const std::filesystem::path &hostPath,
+        const std::filesystem::path &configPath)
+    {
+        const std::uintptr_t remoteBase =
+            FindRemoteModuleBase(
+                processId,
+                hostPath);
+
+        if (remoteBase == 0)
+            return false;
+
+        const std::uintptr_t entryRva =
+            GetExportRva(
+                hostPath,
+                "SSMTPluginHost_Main");
+
+        if (entryRva == 0)
+            return false;
+
+        const std::uintptr_t remoteEntry =
+            remoteBase + entryRva;
+
+        printf(
+            "[Loader] PluginHost remote base: 0x%llX\n",
+            static_cast<unsigned long long>(remoteBase));
+
+        printf(
+            "[Loader] PluginHost entry RVA: 0x%llX\n",
+            static_cast<unsigned long long>(entryRva));
+
+        printf(
+            "[Loader] PluginHost remote entry: 0x%llX\n",
+            static_cast<unsigned long long>(remoteEntry));
+
+        const auto absoluteConfigPath =
+            std::filesystem::absolute(configPath);
+
+        printf(
+            "[Loader] PluginHost config: %S\n",
+            absoluteConfigPath.c_str());
+
+        PVOID remoteConfigPath =
+            WriteRemoteWideString(
+                process,
+                absoluteConfigPath.wstring());
+
+        if (!remoteConfigPath)
+            return false;
+
+        printf(
+            "[Loader] Remote config path: %p\n",
+            remoteConfigPath);
+
+        DWORD hostExitCode = 0;
+
+        const bool started =
+            RunRemoteEntryPoint(
+                process,
+                reinterpret_cast<PVOID>(remoteEntry),
+                remoteConfigPath,
+                hostExitCode);
+
+        if (!started)
+            return false;
+
+        printf(
+            "[Loader] PluginHost exit code: 0x%08lX\n",
+            hostExitCode);
+
+        if (hostExitCode != 0)
+        {
+            printf(
+                "[Loader] PluginHost startup failed.\n");
+
+            return false;
+        }
+
+        printf(
+            "[Loader] PluginHost started successfully.\n");
+
+        return true;
+    }
+
     static bool NtInjectDll(HANDLE process, const wchar_t *dllPath)
     {
         printf("[Loader] NtInjectDll begin: %S\n", dllPath);
@@ -565,6 +860,138 @@ private:
             "[Loader] NtInjectDll success: %S\n",
             dllPath);
 
+        return true;
+    }
+
+    static PVOID WriteRemoteWideString(
+        HANDLE process,
+        const std::wstring &value)
+    {
+        auto ntAlloc =
+            ResolveNtAllocateVirtualMemory();
+
+        auto ntWrite =
+            ResolveNtWriteVirtualMemory();
+
+        if (!ntAlloc || !ntWrite)
+        {
+            printf(
+                "[Loader] Failed to resolve NT memory functions.\n");
+
+            return nullptr;
+        }
+
+        SIZE_T size = (value.size() + 1) * sizeof(wchar_t);
+
+        PVOID remote = nullptr;
+
+        NTSTATUS status =
+            ntAlloc(
+                process,
+                &remote,
+                0,
+                &size,
+                MEM_COMMIT | MEM_RESERVE,
+                PAGE_READWRITE);
+
+        if (status != 0)
+        {
+            printf(
+                "[Loader] Failed to allocate remote string: 0x %X\n",
+                status);
+
+            return nullptr;
+        }
+
+        SIZE_T written = 0;
+
+        status = ntWrite(
+            process,
+            remote,
+            const_cast<wchar_t *>(
+                value.c_str()),
+            size,
+            &written);
+
+        if (status != 0 ||
+            written != size)
+        {
+            printf(
+                "[Loader] Failed to write remote string: "
+                "status=0x%X, written=%zu/%zu\n",
+                status,
+                written,
+                size);
+
+            return nullptr;
+        }
+
+        return remote;
+    }
+
+    static bool RunRemoteEntryPoint(
+        HANDLE process,
+        PVOID entryPoint,
+        PVOID parameter,
+        DWORD &exitCode)
+    {
+        auto ntThread = ResolveNtCreateThreadEx();
+
+        if (!ntThread)
+        {
+            printf(
+                "[Loader] Failed to resolve NtCreateThreadEx.\n");
+
+            return false;
+        }
+
+        HANDLE thread = nullptr;
+
+        const NTSTATUS status =
+            ntThread(
+                &thread,
+                THREAD_ALL_ACCESS,
+                nullptr,
+                process,
+                entryPoint,
+                parameter,
+                0, 0, 0, 0,
+                nullptr);
+
+        if (status != 0 ||
+            !thread)
+        {
+            printf(
+                "[Loader] Failed to create PluginHost thread: 0x%X\n",
+                status);
+
+            return false;
+        }
+
+        const DWORD waitResult = WaitForSingleObject(
+            thread, INFINITE);
+
+        if (waitResult != WAIT_OBJECT_0)
+        {
+            printf(
+                "[Loader] Waiting for PluginHost failed: 0x%08lX\n",
+                waitResult);
+
+            CloseHandle(thread);
+            return false;
+        }
+
+        if (!GetExitCodeThread(thread, &exitCode))
+        {
+            printf(
+                "[Loader] GetExitCodeThread failed: %lu\n",
+                GetLastError());
+
+            CloseHandle(thread);
+            return false;
+        }
+
+        CloseHandle(thread);
         return true;
     }
 };
