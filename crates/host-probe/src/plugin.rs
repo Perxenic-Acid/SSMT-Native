@@ -8,8 +8,8 @@ use libloading::{Library, Symbol};
 use ssmt_plugin_api::{
     SSMT_LOG_ERROR, SSMT_LOG_INFO, SSMT_LOG_WARNING,
     SSMT_PLUGIN_ABI_VERSION, SSMT_STATUS_OK,
-    SsmtHostServices, SsmtLogLevel, SsmtPluginInfo,
-    SsmtPluginInitializeFn, SsmtPluginQueryFn,
+    SsmtHostServices, SsmtLogLevel, SsmtPluginApi,
+    SsmtPluginInfo, SsmtPluginQueryFn,
     SsmtPluginShutdownFn,
 };
 
@@ -40,10 +40,16 @@ impl LoadedPlugin {
         let query: Symbol<SsmtPluginQueryFn> =
             unsafe { library.get(b"SSMTPlugin_Query\0")? };
 
-        let mut info = SsmtPluginInfo::empty();
+        let mut info = SsmtPluginInfo::query_buffer();
+
+        let mut api = SsmtPluginApi::query_buffer();
 
         let status = unsafe {
-            query(SSMT_PLUGIN_ABI_VERSION, &mut info)
+            query(
+                SSMT_PLUGIN_ABI_VERSION,
+                &mut info,
+                &mut api,
+            )
         };
 
         if status != SSMT_STATUS_OK {
@@ -74,11 +80,13 @@ impl LoadedPlugin {
             author: author.to_str()?.to_owned(),
         };
 
-        let initialize: Symbol<SsmtPluginInitializeFn> = unsafe {
-            library.get(b"SSMTPlugin_Initialize\0")?
-        };
+        let initialize = api.initialize.ok_or(
+            "Plugin did not provide initialize callback",
+        )?;
 
-        // let host = SsmtHostServices::new(host_log);
+        let shutdown = api.shutdown.ok_or(
+            "Plugin did not provide shutdown callback",
+        )?;
 
         let host_services =
             Box::new(SsmtHostServices::new(host_log));
@@ -89,10 +97,6 @@ impl LoadedPlugin {
         if status != SSMT_STATUS_OK {
             return Err(format!("SSMTPlugin_Initialize failed: status={status}").into());
         }
-
-        let shutdown: SsmtPluginShutdownFn = unsafe {
-            *library.get::<SsmtPluginShutdownFn>(b"SSMTPlugin_Shutdown\0")?
-        };
 
         Ok(Self {
             _library: library,
@@ -109,9 +113,7 @@ impl LoadedPlugin {
 
 impl Drop for LoadedPlugin {
     fn drop(&mut self) {
-        let status = unsafe {
-            (self.shutdown)()
-        };
+        let status = unsafe { (self.shutdown)() };
 
         if status != SSMT_STATUS_OK {
             eprintln!(

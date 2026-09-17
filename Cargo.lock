@@ -95,6 +95,8 @@ dependencies = [
 name = "ssmt-host-probe"
 version = "0.1.0"
 dependencies = [
+ "libloading",
+ "ssmt-plugin-api",
  "ssmt-plugin-host",
 ]
 

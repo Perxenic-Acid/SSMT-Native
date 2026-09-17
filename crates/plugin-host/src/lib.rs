@@ -99,3 +99,77 @@ fn start_host(
 
     Ok(())
 }
+
+use ssmt_plugin_api::d3d11::SsmtD3D11Context;
+
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn SSMTPluginHost_OnD3D11Ready(
+    device: *mut c_void,
+    immediate_context: *mut c_void,
+    swap_chain: *mut c_void,
+) -> u32 {
+    match std::panic::catch_unwind(|| {
+        on_d3d11_ready(
+            device,
+            immediate_context,
+            swap_chain,
+        )
+    }) {
+        Ok(status) => status,
+
+        Err(_) => {
+            logger::write_line(
+                "[PluginHost] Panic during D3D11Ready.",
+            );
+
+            0xFFFF_FFFF
+        }
+    }
+}
+
+fn on_d3d11_ready(
+    device: *mut c_void,
+    immediate_context: *mut c_void,
+    swap_chain: *mut c_void,
+) -> u32 {
+    if device.is_null()
+        || immediate_context.is_null()
+        || swap_chain.is_null()
+    {
+        logger::write_line(
+            "[PluginHost] D3D11Ready received null pointer.",
+        );
+
+        return 1;
+    }
+
+    let Some(manager) = PLUGIN_MANAGER.get() else {
+        logger::write_line(
+            "[PluginHost] D3D11Ready arrived before PluginManager initialization.",
+        );
+
+        return 2;
+    };
+
+    let Ok(manager) = manager.lock() else {
+        logger::write_line(
+            "[PluginHost] Failed to lock PluginManager during D3D11Ready.",
+        );
+
+        return 3;
+    };
+
+    logger::write_line(&format!(
+        "[PluginHost] D3D11Ready: device={device:p}, context={immediate_context:p}, swap_chain={swap_chain:p}"
+    ));
+
+    let context = SsmtD3D11Context::new(
+        device,
+        immediate_context,
+        swap_chain,
+    );
+
+    manager.notify_d3d11_ready(&context);
+
+    0
+}

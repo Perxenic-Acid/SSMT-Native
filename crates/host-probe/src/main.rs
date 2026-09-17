@@ -38,6 +38,9 @@
 //     Ok(())
 // }
 
+mod plugin;
+mod color_ansi;
+
 use std::{ffi::OsStr, os::windows::ffi::OsStrExt};
 
 use ssmt_plugin_host::SSMTPluginHost_Main;

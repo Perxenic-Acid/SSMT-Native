@@ -6,6 +6,6 @@ edition = "2024"
 [dependencies]
 ssmt-plugin-host = {path = "../plugin-host"}
 
-# ssmt-plugin-api = {path = "../plugin-api"}
+ssmt-plugin-api = {path = "../plugin-api"}
 
-# libloading = "0.9"
+libloading = "0.9"

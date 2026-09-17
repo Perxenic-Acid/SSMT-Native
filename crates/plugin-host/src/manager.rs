@@ -1,7 +1,4 @@
-use std::{
-    default, fs,
-    path::{Path, PathBuf},
-};
+use std::path::Path;
 
 use crate::{LoadedPlugin, plugin};
 
@@ -18,70 +15,6 @@ impl PluginManager {
         &self.plugins
     }
 
-    pub fn load_directory(
-        &mut self,
-        directory: &Path,
-    ) -> std::io::Result<()> {
-        let mut plugin_paths = Vec::new();
-
-        for entry in fs::read_dir(directory)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            if !path.is_file() {
-                continue;
-            }
-
-            let is_dll = path
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| {
-                    extension.eq_ignore_ascii_case("dll")
-                });
-
-            if !is_dll {
-                continue;
-            }
-
-            plugin_paths.push(path);
-        }
-
-        plugin_paths.sort();
-
-        for path in plugin_paths {
-            println!("Loading plugin: {}", path.display());
-
-            match LoadedPlugin::load(&path) {
-                Ok(plugin) => {
-                    println!(
-                        "Loaded plugin: {} {}",
-                        plugin.metadata().name,
-                        plugin.metadata().version
-                    );
-
-                    self.plugins.push(plugin);
-                }
-
-                Err(error) => {
-                    eprintln!(
-                        "Failed to load plugin {}: {error}",
-                        path.display()
-                    );
-                }
-            }
-        }
-
-        Ok(())
-    }
-}
-
-impl Default for PluginManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl PluginManager {
     pub fn load_plugins(
         &mut self,
         directory: &Path,
@@ -113,5 +46,30 @@ impl PluginManager {
                 }
             }
         }
+    }
+}
+
+use ssmt_plugin_api::d3d11::SsmtD3D11Context;
+impl PluginManager {
+    pub fn notify_d3d11_ready(
+        &self,
+        context: &SsmtD3D11Context,
+    ) {
+        for plugin in &self.plugins {
+            if let Err(status) =
+                plugin.on_d3d11_ready(context)
+            {
+                crate::logger::write_line(&format!(
+                    "[PluginHost] Plugin {} rejected D3D11 context: status={status}",
+                    plugin.metadata().name
+                ));
+            }
+        }
+    }
+}
+
+impl Default for PluginManager {
+    fn default() -> Self {
+        Self::new()
     }
 }

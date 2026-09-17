@@ -1,4 +1,5 @@
 use std::{
+    cmp::Ordering,
     ffi::{CStr, c_char},
     path::Path,
 };
@@ -7,10 +8,10 @@ use libloading::{Library, Symbol};
 
 use ssmt_plugin_api::{
     SSMT_LOG_ERROR, SSMT_LOG_INFO, SSMT_LOG_WARNING,
-    SSMT_PLUGIN_ABI_VERSION, SSMT_STATUS_OK,
-    SsmtHostServices, SsmtLogLevel, SsmtPluginInfo,
-    SsmtPluginInitializeFn, SsmtPluginQueryFn,
-    SsmtPluginShutdownFn,
+    SSMT_PLUGIN_ABI_VERSION, SSMT_STATUS_INVALID_ARGUMENT,
+    SSMT_STATUS_OK, SsmtHostServices, SsmtLogLevel,
+    SsmtPluginApi, SsmtPluginInfo, SsmtPluginQueryFn,
+    SsmtStatus,
 };
 
 #[derive(Debug)]
@@ -20,13 +21,11 @@ pub struct PluginMetadata {
     pub author: String,
 }
 
-// use libloading::Library;
-
 pub struct LoadedPlugin {
     _library: Library,
     _host_services: Box<SsmtHostServices>,
 
-    shutdown: SsmtPluginShutdownFn,
+    api: SsmtPluginApi,
 
     metadata: PluginMetadata,
 }
@@ -37,14 +36,61 @@ impl LoadedPlugin {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let library = unsafe { Library::new(path)? };
 
+        // dll 唯一按名查找入口
         let query: Symbol<SsmtPluginQueryFn> =
             unsafe { library.get(b"SSMTPlugin_Query\0")? };
 
-        let mut info = SsmtPluginInfo::empty();
+        let mut info = SsmtPluginInfo::query_buffer();
+
+        let mut api = SsmtPluginApi::query_buffer();
+
+        let info_capacity = info.struct_size;
+
+        let api_capacity = api.struct_size;
 
         let status = unsafe {
-            query(SSMT_PLUGIN_ABI_VERSION, &mut info)
+            query(
+                SSMT_PLUGIN_ABI_VERSION,
+                &mut info,
+                &mut api,
+            )
         };
+
+        if info.struct_size != info_capacity {
+            return Err(
+                "Plugin modified SsmtPluginInfo.struct_size"
+                    .into()
+            );
+        }
+
+        if api.struct_size != api_capacity {
+            return Err(
+                "Plugin modified SsmtPluginApi.struct_size"
+                    .into(),
+            );
+        }
+
+        if info.abi_version != SSMT_PLUGIN_ABI_VERSION {
+            return Err(
+                format!(
+                    "Plugin info ABI mismatch: host={}, plugin={}",
+                    SSMT_PLUGIN_ABI_VERSION,
+                    info.abi_version
+                )
+                .into()
+            );
+        }
+
+        if api.abi_version != SSMT_PLUGIN_ABI_VERSION {
+            return Err(
+                format!(
+                    "Plugin API ABI mismatch: host={}, plugin={}",
+                    SSMT_PLUGIN_ABI_VERSION,
+                    api.abi_version
+                )
+                .into()
+            );
+        }
 
         if status != SSMT_STATUS_OK {
             return Err(format!(
@@ -58,6 +104,17 @@ impl LoadedPlugin {
             || info.author.is_null()
         {
             return Err("Plugin returned invalid metadata pointers.".into());
+        }
+
+        if api.initialize.is_none() {
+            return Err("Plugin did not provide initialize callback".into());
+        }
+
+        if api.shutdown.is_none() {
+            return Err(
+                "Plugin did not provide shutdown callback"
+                    .into(),
+            );
         }
 
         let (name, version, author) = unsafe {
@@ -74,14 +131,12 @@ impl LoadedPlugin {
             author: author.to_str()?.to_owned(),
         };
 
-        let initialize: Symbol<SsmtPluginInitializeFn> = unsafe {
-            library.get(b"SSMTPlugin_Initialize\0")?
-        };
-
-        // let host = SsmtHostServices::new(host_log);
-
         let host_services =
             Box::new(SsmtHostServices::new(host_log));
+
+        let initialize = api
+            .initialize
+            .expect("initialize was checked above");
 
         let status =
             unsafe { initialize(host_services.as_ref()) };
@@ -90,16 +145,10 @@ impl LoadedPlugin {
             return Err(format!("SSMTPlugin_Initialize failed: status={status}").into());
         }
 
-        let shutdown: SsmtPluginShutdownFn = unsafe {
-            *library.get::<SsmtPluginShutdownFn>(
-                b"SSMTPlugin_Shutdown\0",
-            )?
-        };
-
         Ok(Self {
             _library: library,
             _host_services: host_services,
-            shutdown,
+            api,
             metadata,
         })
     }
@@ -111,12 +160,15 @@ impl LoadedPlugin {
 
 impl Drop for LoadedPlugin {
     fn drop(&mut self) {
-        let status = unsafe { (self.shutdown)() };
+        let Some(shutdown) = self.api.shutdown else {
+            return;
+        };
+        let status = unsafe { (shutdown)() };
 
         if status != SSMT_STATUS_OK {
-            eprintln!(
+            crate::logger::write_line(&format!(
                 "SsmtPlugin_Shutdown failed: status={status}"
-            );
+            ));
         }
     }
 }
@@ -168,4 +220,25 @@ unsafe extern "C" fn host_log(
     crate::logger::write_line(&format!(
         "{prefix} {message}"
     ));
+}
+
+use ssmt_plugin_api::d3d11::SsmtD3D11Context;
+
+impl LoadedPlugin {
+    pub(crate) fn on_d3d11_ready(
+        &self,
+        context: &SsmtD3D11Context,
+    ) -> Result<(), SsmtStatus> {
+        let Some(callback) = self.api.on_d3d11_ready else {
+            return Ok(());
+        };
+
+        let status = unsafe { callback(context) };
+
+        if status == SSMT_STATUS_OK {
+            Ok(())
+        } else {
+            Err(status)
+        }
+    }
 }
