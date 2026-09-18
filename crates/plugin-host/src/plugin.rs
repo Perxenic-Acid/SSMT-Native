@@ -70,6 +70,13 @@ impl LoadedPlugin {
             );
         }
 
+        if status != SSMT_STATUS_OK {
+            return Err(format!(
+                "SSMTPlugin_Query failed: status={status}"
+            )
+            .into());
+        }
+
         if info.abi_version != SSMT_PLUGIN_ABI_VERSION {
             return Err(
                 format!(
@@ -92,12 +99,12 @@ impl LoadedPlugin {
             );
         }
 
-        if status != SSMT_STATUS_OK {
-            return Err(format!(
-                "SSMTPlugin_Query failed: status={status}"
-            )
-            .into());
-        }
+        // if status != SSMT_STATUS_OK {
+        //     return Err(format!(
+        //         "SSMTPlugin_Query failed: status={status}"
+        //     )
+        //     .into());
+        // }
 
         if info.name.is_null()
             || info.version.is_null()
