@@ -46,3 +46,19 @@ pub const SSMT_PLUGIN_API_D3D11_READY_SIZE: u32 =
     (core::mem::offset_of!(SsmtPluginApi, on_d3d11_ready)
         + size_of::<Option<SsmtPluginOnD3D11ReadyFn>>())
         as u32;
+
+#[repr(C)]
+pub struct SsmtPresentContext {
+    pub struct_size: u32,
+    pub abi_version: u32,
+
+    pub swap_chain: *mut c_void,
+
+    pub sync_interval: u32,
+    pub flags: u32,
+}
+
+pub type SsmtPluginOnPresentFn =
+    unsafe extern "C" fn(
+        context: *const SsmtPresentContext,
+    ) -> SsmtStatus;

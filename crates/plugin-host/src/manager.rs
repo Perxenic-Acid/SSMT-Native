@@ -49,7 +49,10 @@ impl PluginManager {
     }
 }
 
-use ssmt_plugin_api::d3d11::SsmtD3D11Context;
+use ssmt_plugin_api::d3d11::{
+    SsmtD3D11Context, SsmtPluginOnPresentFn,
+    SsmtPresentContext,
+};
 impl PluginManager {
     pub fn notify_d3d11_ready(
         &self,
@@ -73,3 +76,8 @@ impl Default for PluginManager {
         Self::new()
     }
 }
+
+pub struct RenderDispatch {
+    present: Box<[SsmtPluginOnPresentFn]>,
+}
+

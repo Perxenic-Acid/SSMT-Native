@@ -6,7 +6,9 @@ use core::ffi::c_char;
 use core::mem::size_of;
 use core::ptr::null;
 
-use crate::d3d11::SsmtPluginOnD3D11ReadyFn;
+use crate::d3d11::{
+    SsmtPluginOnD3D11ReadyFn, SsmtPluginOnPresentFn,
+};
 
 pub const SSMT_PLUGIN_ABI_VERSION: u32 = 2;
 
@@ -30,20 +32,6 @@ impl SsmtPluginInfo {
             author: null(),
         }
     }
-    // pub const fn new(
-    //     name: *const c_char,
-    //     version: *const c_char,
-    //     author: *const c_char,
-    // ) -> Self {
-    //     Self {
-    //         struct_size: size_of::<Self>() as u32,
-    //         abi_version: SSMT_PLUGIN_ABI_VERSION,
-
-    //         name,
-    //         version,
-    //         author,
-    //     }
-    // }
 }
 
 pub type SsmtStatus = u32;
@@ -121,6 +109,8 @@ pub struct SsmtPluginApi {
     pub shutdown: Option<SsmtPluginShutdownFn>,
 
     pub on_d3d11_ready: Option<SsmtPluginOnD3D11ReadyFn>,
+
+    pub on_present: Option<SsmtPluginOnPresentFn>,
 }
 
 impl SsmtPluginApi {
@@ -132,6 +122,7 @@ impl SsmtPluginApi {
             initialize: None,
             shutdown: None,
             on_d3d11_ready: None,
+            on_present: None,
         }
     }
 }
