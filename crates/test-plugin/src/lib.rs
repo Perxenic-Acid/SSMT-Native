@@ -52,6 +52,8 @@ pub unsafe extern "C" fn SSMTPlugin_Query(
     }
 
     unsafe {
+        // out info
+
         core::ptr::addr_of_mut!((*out_info).abi_version)
             .write(SSMT_PLUGIN_ABI_VERSION);
 
@@ -60,6 +62,11 @@ pub unsafe extern "C" fn SSMTPlugin_Query(
 
         core::ptr::addr_of_mut!((*out_info).author)
             .write(PLUGIN_AUTHOR.as_ptr().cast());
+
+        core::ptr::addr_of_mut!((*out_info).version)
+            .write(PLUGIN_VERSION.as_ptr().cast());
+
+        // out api
 
         core::ptr::addr_of_mut!((*out_api).abi_version)
             .write(SSMT_PLUGIN_ABI_VERSION);

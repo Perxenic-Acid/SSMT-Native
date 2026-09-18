@@ -1,6 +1,4 @@
 {
     "pluginDirectory": "Plugins",
-    "plugins": [
-        "ssmt_test_plugin.dll"
-    ]
+    "plugins": []
 }

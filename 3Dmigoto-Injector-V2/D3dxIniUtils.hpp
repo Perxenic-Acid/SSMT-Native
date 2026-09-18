@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <filesystem>
 #include <vector>
+#include <iostream>
 
 class D3dxIniUtils
 {
@@ -31,6 +32,8 @@ public:
 			parse_error = L"Your 3Dmigoto folder's d3dx.ini didn't existed, please install or update your 3Dmigoto package.\n";
 			return;
 		}
+
+		// std::wcout << L"Mark0" << std::endl;
 
 		char *buf, target[MAX_PATH], launch[MAX_PATH], module_path[MAX_PATH];
 		char launch_args[MAX_PATH];
@@ -140,6 +143,8 @@ public:
 
 		const std::filesystem::path runPath{
 			executablePath};
+
+		// std::wcout << L"mark1" << std::endl;
 
 		const auto playerTweaksDll =
 			runPath.parent_path() / L"SSMT-Player-Tweaks.dll";

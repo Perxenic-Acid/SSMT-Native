@@ -10,14 +10,11 @@ pub use plugin::{LoadedPlugin, PluginMetadata};
 
 use core::ffi::c_void;
 
-use std::{
-    path::Path,
-    sync::{Mutex, OnceLock},
-};
+use std::{path::Path, sync::OnceLock};
 
 use crate::config::HostConfig;
 
-static PLUGIN_MANAGER: OnceLock<Mutex<PluginManager>> =
+static PLUGIN_MANAGER: OnceLock<PluginManager> =
     OnceLock::new();
 
 #[unsafe(no_mangle)]
@@ -90,7 +87,7 @@ fn start_host(
         .load_plugins(&plugin_directory, &config.plugins);
 
     PLUGIN_MANAGER
-        .set(Mutex::new(manager))
+        .set(manager)
         .map_err(|_| "PluginHost is already initialized")?;
 
     logger::write_line(
@@ -151,13 +148,13 @@ fn on_d3d11_ready(
         return 2;
     };
 
-    let Ok(manager) = manager.lock() else {
-        logger::write_line(
-            "[PluginHost] Failed to lock PluginManager during D3D11Ready.",
-        );
+    // let Ok(manager) = manager.lock() else {
+    //     logger::write_line(
+    //         "[PluginHost] Failed to lock PluginManager during D3D11Ready.",
+    //     );
 
-        return 3;
-    };
+    //     return 3;
+    // };
 
     logger::write_line(&format!(
         "[PluginHost] D3D11Ready: device={device:p}, context={immediate_context:p}, swap_chain={swap_chain:p}"
