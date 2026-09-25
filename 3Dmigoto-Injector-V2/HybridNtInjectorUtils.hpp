@@ -56,6 +56,42 @@ public:
     }
 
 private:
+    static bool WaitBeforeResume(
+        const LoaderOptions &options,
+        const PROCESS_INFORMATION &process,
+        LaunchEventEmitter &events)
+    {
+        if (!options.launch_barrier_id)
+            return true;
+
+        const std::wstring prefix = L"Local\\SSMT4.Launch." + *options.launch_barrier_id;
+        const std::wstring readyName = prefix + L".Ready";
+        const std::wstring releaseName = prefix + L".Release";
+        HANDLE ready = OpenEventW(EVENT_MODIFY_STATE, FALSE, readyName.c_str());
+        HANDLE release = OpenEventW(SYNCHRONIZE, FALSE, releaseName.c_str());
+        if (!ready || !release)
+        {
+            events.emit_error("before_resume", "barrier_open_failed", "Could not open launch barrier events");
+            if (ready)
+                CloseHandle(ready);
+            if (release)
+                CloseHandle(release);
+            return false;
+        }
+
+        events.emit("waiting_before_resume");
+        const bool signaled = SetEvent(ready) != FALSE;
+        const DWORD waitResult = signaled ? WaitForSingleObject(release, INFINITE) : WAIT_FAILED;
+        CloseHandle(ready);
+        CloseHandle(release);
+        if (waitResult != WAIT_OBJECT_0)
+        {
+            events.emit_error("before_resume", "barrier_wait_failed", "Launch barrier wait failed");
+            return false;
+        }
+        return true;
+    }
+
     static void WaitForExit(const char *msg = "\nPress Enter to close...\n")
     {
         printf("%s", msg);
@@ -278,6 +314,15 @@ private:
                 if (!pluginHostOk)
                     events.emit_error("plugin_host", "plugin_host_start_failed", "PluginHost failed to start");
             }
+        }
+
+        if (!WaitBeforeResume(options, pi, events))
+        {
+            TerminateProcess(pi.hProcess, ERROR_CANCELLED);
+            UnhookWindowsHookEx(d3d11Hook);
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+            return false;
         }
 
         events.emit("before_resume");

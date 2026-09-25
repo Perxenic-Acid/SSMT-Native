@@ -11,6 +11,7 @@ struct LoaderOptions
         plugin_host_config;
     bool machine_readable = false;
     bool test_mode = false;
+    std::optional<std::wstring> launch_barrier_id;
 };
 
 inline LoaderOptions ParseLoaderOptions(
@@ -54,6 +55,14 @@ inline LoaderOptions ParseLoaderOptions(
         if (arg == L"--test-mode")
         {
             options.test_mode = true;
+            continue;
+        }
+
+        if (arg == L"--launch-barrier")
+        {
+            if (i + 1 >= argc)
+                throw std::runtime_error("--launch-barrier requires an id");
+            options.launch_barrier_id = argv[++i];
             continue;
         }
         throw std::runtime_error(
