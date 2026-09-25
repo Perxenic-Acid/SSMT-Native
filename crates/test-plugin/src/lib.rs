@@ -1,17 +1,22 @@
 use ssmt_plugin_api::{
-    SSMT_LOG_ERROR, SSMT_LOG_INFO, SSMT_PLUGIN_ABI_VERSION,
-    SSMT_PLUGIN_API_BASE_SIZE, SSMT_PLUGIN_INFO_BASE_SIZE,
+    SSMT_LOG_INFO, SSMT_PLUGIN_ABI_VERSION,
+    SSMT_PLUGIN_API_BASE_SIZE,
+    SSMT_PLUGIN_API_PRESENT_SIZE,
+    SSMT_PLUGIN_INFO_BASE_SIZE,
     SSMT_STATUS_INVALID_ARGUMENT, SSMT_STATUS_OK,
     SSMT_STATUS_STRUCT_TOO_SMALL,
     SSMT_STATUS_UNSUPPORTED_ABI, SsmtHostServices,
     SsmtPluginApi, SsmtPluginInfo, SsmtStatus,
-    d3d11::SSMT_PLUGIN_API_D3D11_READY_SIZE,
+    d3d11::{
+        SSMT_PLUGIN_API_D3D11_READY_SIZE,
+        SsmtPresentContext,
+    },
 };
 
 use core::{
     mem::size_of,
     ptr::null_mut,
-    sync::atomic::{AtomicPtr, Ordering},
+    sync::atomic::{AtomicPtr, AtomicU64, Ordering},
 };
 
 static HOST: AtomicPtr<SsmtHostServices> =
@@ -85,6 +90,13 @@ pub unsafe extern "C" fn SSMTPlugin_Query(
                 (*out_api).on_d3d11_ready
             )
             .write(Some(plugin_on_d3d11_ready));
+        }
+    }
+
+    if api_capacity >= SSMT_PLUGIN_API_PRESENT_SIZE {
+        unsafe {
+            core::ptr::addr_of_mut!((*out_api).on_present)
+                .write(Some(plugin_on_present));
         }
     }
 
@@ -172,4 +184,75 @@ unsafe extern "C" fn plugin_on_d3d11_ready(
     }
 
     SSMT_STATUS_OK
+}
+
+static FRAME_COUNT: AtomicU64 = AtomicU64::new(0);
+
+unsafe extern "C" fn plugin_on_present(
+    context: *const SsmtPresentContext,
+) -> SsmtStatus {
+    if context.is_null() {
+        return SSMT_STATUS_INVALID_ARGUMENT;
+    }
+
+    let context = unsafe { &*context };
+
+    if context.struct_size
+        < size_of::<SsmtPresentContext>() as u32
+        || context.abi_version != SSMT_PLUGIN_ABI_VERSION
+        || context.device.is_null()
+        || context.immediate_context.is_null()
+        || context.swap_chain.is_null()
+    {
+        return SSMT_STATUS_INVALID_ARGUMENT;
+    }
+
+    let frame =
+        FRAME_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+
+    if frame % 300 == 0 {
+        let host = HOST.load(Ordering::Acquire);
+
+        if !host.is_null() {
+            let message = present_message(frame);
+
+            unsafe {
+                ((*host).log)(
+                    SSMT_LOG_INFO,
+                    message.as_ptr().cast(),
+                );
+            }
+        }
+    }
+
+    SSMT_STATUS_OK
+}
+
+fn present_message(frame: u64) -> [u8; 64] {
+    const PREFIX: &[u8] = b"Present callback alive: frame=";
+
+    let mut message = [0; 64];
+    message[..PREFIX.len()].copy_from_slice(PREFIX);
+
+    let mut digits = [0; 20];
+    let mut number = frame;
+    let mut first_digit = digits.len();
+
+    loop {
+        first_digit -= 1;
+        digits[first_digit] = b'0' + (number % 10) as u8;
+        number /= 10;
+
+        if number == 0 {
+            break;
+        }
+    }
+
+    let digit_count = digits.len() - first_digit;
+    let end = PREFIX.len() + digit_count;
+    message[PREFIX.len()..end]
+        .copy_from_slice(&digits[first_digit..]);
+    message[end] = 0;
+
+    message
 }

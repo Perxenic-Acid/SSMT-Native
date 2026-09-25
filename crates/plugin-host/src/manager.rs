@@ -1,14 +1,22 @@
 use std::path::Path;
 
-use crate::{LoadedPlugin, plugin};
+use crate::{
+    LoadedPlugin, render_dispatch::RenderDispatch,
+};
 
 pub struct PluginManager {
     plugins: Vec<LoadedPlugin>,
+    render_dispatch: RenderDispatch,
 }
 
 impl PluginManager {
     pub fn new() -> Self {
-        Self { plugins: Vec::new() }
+        Self {
+            plugins: Vec::new(),
+            render_dispatch: RenderDispatch::from_plugins(
+                &[],
+            ),
+        }
     }
 
     pub fn plugins(&self) -> &[LoadedPlugin] {
@@ -46,12 +54,14 @@ impl PluginManager {
                 }
             }
         }
+
+        self.render_dispatch =
+            RenderDispatch::from_plugins(&self.plugins);
     }
 }
 
 use ssmt_plugin_api::d3d11::{
-    SsmtD3D11Context, SsmtPluginOnPresentFn,
-    SsmtPresentContext,
+    SsmtD3D11Context, SsmtPresentContext,
 };
 impl PluginManager {
     pub fn notify_d3d11_ready(
@@ -69,6 +79,13 @@ impl PluginManager {
             }
         }
     }
+
+    pub fn dispatch_present(
+        &self,
+        context: &SsmtPresentContext,
+    ) {
+        self.render_dispatch.dispatch_present(context);
+    }
 }
 
 impl Default for PluginManager {
@@ -76,8 +93,3 @@ impl Default for PluginManager {
         Self::new()
     }
 }
-
-pub struct RenderDispatch {
-    present: Box<[SsmtPluginOnPresentFn]>,
-}
-

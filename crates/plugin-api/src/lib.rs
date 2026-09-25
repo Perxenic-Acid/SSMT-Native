@@ -65,6 +65,11 @@ pub const SSMT_PLUGIN_API_BASE_SIZE: u32 =
         + size_of::<Option<SsmtPluginShutdownFn>>())
         as u32;
 
+pub const SSMT_PLUGIN_API_PRESENT_SIZE: u32 =
+    (core::mem::offset_of!(SsmtPluginApi, on_present)
+        + size_of::<Option<SsmtPluginOnPresentFn>>())
+        as u32;
+
 #[repr(C)]
 pub struct SsmtHostServices {
     pub struct_size: u32,

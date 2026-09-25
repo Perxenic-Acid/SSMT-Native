@@ -3,6 +3,7 @@ mod config;
 mod logger;
 mod manager;
 mod plugin;
+mod render_dispatch;
 
 pub use manager::PluginManager;
 
@@ -97,7 +98,9 @@ fn start_host(
     Ok(())
 }
 
-use ssmt_plugin_api::d3d11::SsmtD3D11Context;
+use ssmt_plugin_api::d3d11::{
+    SsmtD3D11Context, SsmtPresentContext,
+};
 
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn SSMTPluginHost_OnD3D11Ready(
@@ -167,6 +170,38 @@ fn on_d3d11_ready(
     );
 
     manager.notify_d3d11_ready(&context);
+
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn SSMTPluginHost_OnPresent(
+    device: *mut c_void,
+    immediate_context: *mut c_void,
+    swap_chain: *mut c_void,
+    sync_interval: u32,
+    flags: u32,
+) -> u32 {
+    if device.is_null()
+        || immediate_context.is_null()
+        || swap_chain.is_null()
+    {
+        return 1;
+    }
+
+    let Some(manager) = PLUGIN_MANAGER.get() else {
+        return 2;
+    };
+
+    let context = SsmtPresentContext::new(
+        device,
+        immediate_context,
+        swap_chain,
+        sync_interval,
+        flags,
+    );
+
+    manager.dispatch_present(&context);
 
     0
 }

@@ -1,5 +1,4 @@
 use std::{
-    cmp::Ordering,
     ffi::{CStr, c_char},
     path::Path,
 };
@@ -8,10 +7,10 @@ use libloading::{Library, Symbol};
 
 use ssmt_plugin_api::{
     SSMT_LOG_ERROR, SSMT_LOG_INFO, SSMT_LOG_WARNING,
-    SSMT_PLUGIN_ABI_VERSION, SSMT_STATUS_INVALID_ARGUMENT,
-    SSMT_STATUS_OK, SsmtHostServices, SsmtLogLevel,
-    SsmtPluginApi, SsmtPluginInfo, SsmtPluginQueryFn,
-    SsmtStatus,
+    SSMT_PLUGIN_ABI_VERSION, SSMT_STATUS_OK,
+    SsmtHostServices, SsmtLogLevel, SsmtPluginApi,
+    SsmtPluginInfo, SsmtPluginQueryFn, SsmtStatus,
+    d3d11::SsmtPluginOnPresentFn,
 };
 
 #[derive(Debug)]
@@ -247,5 +246,11 @@ impl LoadedPlugin {
         } else {
             Err(status)
         }
+    }
+
+    pub(crate) fn present_callback(
+        &self,
+    ) -> Option<SsmtPluginOnPresentFn> {
+        self.api.on_present
     }
 }
