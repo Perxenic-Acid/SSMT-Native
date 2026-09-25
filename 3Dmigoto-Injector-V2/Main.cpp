@@ -132,7 +132,7 @@ int wmain(
 			"[Loader] PluginHost disabled.\n");
 	}
 
-	const bool ok = HybridNtInjectorUtils::Run(d3dxIniUtils, options);
+	const bool ok = HybridNtInjectorUtils::Run(d3dxIniUtils, options, machine_output);
 
 	CloseHandle(instanceMutex);
 
