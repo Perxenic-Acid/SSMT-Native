@@ -38,9 +38,10 @@ class HybridNtInjectorUtils
 public:
     static bool Run(
         D3dxIniUtils &ini,
-        const LoaderOptions &options)
+        const LoaderOptions &options,
+        HANDLE machine_output = GetStdHandle(STD_OUTPUT_HANDLE))
     {
-        LaunchEventEmitter events(options.machine_readable);
+        LaunchEventEmitter events(options.machine_readable, machine_output);
         printf("[Loader] Starting injection.\n");
         if (ini.launch.empty())
         {
