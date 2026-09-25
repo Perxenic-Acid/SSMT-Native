@@ -11,6 +11,7 @@ add_executable(3Dmigoto-Injector-V2
     3Dmigoto-Injector-V2.rc
     D3dxIniUtils.hpp
     HybridNtInjectorUtils.hpp
+    LaunchEvents.hpp
     InjectorUtils.hpp
     LoaderOptions.hpp
     resource.h

@@ -11,6 +11,7 @@
 
 #include "D3dxIniUtils.hpp"
 #include "InjectorUtils.hpp"
+#include "LaunchEvents.hpp"
 #include "LoaderOptions.hpp"
 
 typedef NTSTATUS(NTAPI *pNtCreateThreadEx)(PHANDLE, ACCESS_MASK, PVOID, HANDLE, PVOID, PVOID, ULONG, ULONG_PTR, SIZE_T, SIZE_T, PVOID);
@@ -39,17 +40,19 @@ public:
         D3dxIniUtils &ini,
         const LoaderOptions &options)
     {
+        LaunchEventEmitter events(options.machine_readable);
         printf("[Loader] Starting injection.\n");
         if (ini.launch.empty())
         {
             printf("[Loader] No launch configured; waiting for target process.\n");
-            return FallbackWaitMode(ini);
+            return FallbackWaitMode(ini, events);
         }
 
         return LaunchAndInject(
             ini,
             options,
-            ini.delay);
+            ini.delay,
+            events);
     }
 
 private:
@@ -79,12 +82,14 @@ private:
     static bool LaunchAndInject(
         D3dxIniUtils &ini,
         const LoaderOptions &options,
-        const std::wstring &delayStr)
+        const std::wstring &delayStr,
+        LaunchEventEmitter &events)
     {
         printf("[Loader] Launch-and-inject mode selected.\n");
         HHOOK d3d11Hook = InstallGlobalCbtHook(ini.module.c_str());
         if (!d3d11Hook)
         {
+            events.emit_error("prepare", "hook_install_failed", "Failed to install global CBT hook");
             return false;
         }
 
@@ -104,6 +109,7 @@ private:
             if (!launched)
             {
                 printf("[Loader] ShellExecute failed: %Id\n", reinterpret_cast<INT_PTR>(result));
+                events.emit_error("target_launch", "shell_execute_failed", "ShellExecute failed");
             }
 
             bool ok = false;
@@ -114,6 +120,7 @@ private:
                 if (!localModule || !GetModuleFileNameW(localModule, moduleFullPath, MAX_PATH))
                 {
                     printf("[Loader] Failed to resolve 3DMigoto module path: %lu\n", GetLastError());
+                    events.emit_error("runtime", "module_resolve_failed", "Failed to resolve 3DMigoto module path");
                 }
                 else
                 {
@@ -131,6 +138,15 @@ private:
             {
                 CoUninitialize();
             }
+            if (ok)
+            {
+                events.emit("runtime_detected");
+                events.emit("launch_complete");
+            }
+            else
+            {
+                events.emit_error("runtime", "runtime_not_detected", "3DMigoto runtime was not detected");
+            }
             return ok;
         }
 
@@ -139,6 +155,7 @@ private:
         if (pathLen == 0 || pathLen >= MAX_PATH || !filePart)
         {
             printf("[Loader] Failed to resolve launch working directory: %lu\n", GetLastError());
+            events.emit_error("target_launch", "working_directory_failed", "Failed to resolve launch working directory");
             UnhookWindowsHookEx(d3d11Hook);
             return false;
         }
@@ -173,9 +190,12 @@ private:
                 &pi))
         {
             printf("[Loader] CreateProcess failed: %lu\n", GetLastError());
+            events.emit_error("target_launch", "create_process_failed", "CreateProcess failed");
             UnhookWindowsHookEx(d3d11Hook);
             return false;
         }
+
+        events.emit_pid("target_created", pi.dwProcessId);
 
         bool extraOk = true;
 
@@ -192,6 +212,8 @@ private:
                 ini.inject_dlls.size(),
                 dllPath.c_str());
 
+            events.emit_module("inject_begin", dllPath.c_str());
+
             const bool currentOk =
                 NtInjectDll(
                     pi.hProcess,
@@ -202,7 +224,11 @@ private:
                 printf(
                     "[Loader] Failed to inject extra DLL: %S\n",
                     dllPath.c_str());
+                events.emit_error("inject", "inject_failed", "Failed to inject extra DLL");
             }
+
+            if (currentOk)
+                events.emit_module("inject_complete", dllPath.c_str());
 
             extraOk =
                 extraOk && currentOk;
@@ -212,6 +238,7 @@ private:
 
         if (options.plugin_host_config)
         {
+            events.emit("plugin_host_begin");
             const auto hostPath =
                 GetSiblingPath(L"SSMT-PluginHost.dll");
 
@@ -221,6 +248,8 @@ private:
                 printf(
                     "[Loader] PluginHost DLL not found: %S\n",
                     hostPath.c_str());
+
+                events.emit_error("plugin_host", "plugin_host_missing", "PluginHost DLL not found");
 
                 pluginHostOk = false;
             }
@@ -242,11 +271,16 @@ private:
                             pi.hProcess,
                             pi.dwProcessId,
                             hostPath,
-                            *options.plugin_host_config);
+                        *options.plugin_host_config);
+                    if (pluginHostOk)
+                        events.emit("plugin_host_ready");
                 }
+                if (!pluginHostOk)
+                    events.emit_error("plugin_host", "plugin_host_start_failed", "PluginHost failed to start");
             }
         }
 
+        events.emit("before_resume");
         const DWORD previousSuspendCount =
             ResumeThread(pi.hThread);
 
@@ -255,6 +289,7 @@ private:
             printf(
                 "[Loader] ResumeThread failed: %lu\n",
                 GetLastError());
+            events.emit_error("resume", "resume_failed", "ResumeThread failed");
         }
         else
         {
@@ -262,6 +297,7 @@ private:
                 "[Loader] Target resumed. "
                 "Previous suspend count: %lu\n",
                 previousSuspendCount);
+            events.emit("target_resumed");
         }
 
         const ModuleWaitResult moduleResult = WaitForModuleLoaded(pi.dwProcessId, ini.module.c_str(), 30000);
@@ -273,6 +309,7 @@ private:
             printf(
                 "[Loader] 3DMigoto module loaded.\n");
             moduleOk = true;
+            events.emit("runtime_detected");
             break;
 
         case ModuleWaitResult::VerificationDenied:
@@ -280,12 +317,14 @@ private:
                 "[Loader] 3Dmigoto module verification was denied; "
                 "assuming success.\n");
             moduleOk = true;
+            events.emit("runtime_detected");
             break;
 
         case ModuleWaitResult::TimedOut:
             printf(
                 "[Loader] Timed out waiting for 3DMigoto module.\n");
             moduleOk = false;
+            events.emit_error("runtime", "runtime_timeout", "Timed out waiting for 3DMigoto module");
             break;
         }
         // if (moduleLoaded)
@@ -302,16 +341,21 @@ private:
         CloseHandle(pi.hProcess);
 
         const bool ok = moduleOk && extraOk && pluginHostOk;
+        if (ok)
+            events.emit("launch_complete");
+        else
+            events.emit_error("launch", "launch_failed", "Launch completed with errors");
         AutoExitOrWait(delayStr);
         return ok;
     }
 
-    static bool FallbackWaitMode(D3dxIniUtils &ini)
+    static bool FallbackWaitMode(D3dxIniUtils &ini, LaunchEventEmitter &events)
     {
         printf("[Loader] Fallback wait mode selected.\n");
         HHOOK d3d11Hook = InstallGlobalCbtHook(ini.module.c_str());
         if (!d3d11Hook)
         {
+            events.emit_error("prepare", "hook_install_failed", "Failed to install global CBT hook");
             return false;
         }
 
@@ -320,6 +364,7 @@ private:
         if (!localModule || !GetModuleFileNameW(localModule, moduleFullPath, MAX_PATH))
         {
             printf("[Loader] Failed to load 3DMigoto module: %lu\n", GetLastError());
+            events.emit_error("runtime", "module_load_failed", "Failed to load 3DMigoto module");
             UnhookWindowsHookEx(d3d11Hook);
             return false;
         }
@@ -333,6 +378,15 @@ private:
             false);
 
         UnhookWindowsHookEx(d3d11Hook);
+        if (ok)
+        {
+            events.emit("runtime_detected");
+            events.emit("launch_complete");
+        }
+        else
+        {
+            events.emit_error("runtime", "runtime_not_detected", "3DMigoto runtime was not detected");
+        }
         return ok;
     }
 

@@ -9,6 +9,8 @@ struct LoaderOptions
 {
     std::optional<std::filesystem::path>
         plugin_host_config;
+    bool machine_readable = false;
+    bool test_mode = false;
 };
 
 inline LoaderOptions ParseLoaderOptions(
@@ -32,6 +34,26 @@ inline LoaderOptions ParseLoaderOptions(
                 std::filesystem::path{
                     argv[++i]};
 
+            continue;
+        }
+
+        if (arg == L"--machine-readable" || arg == L"--events")
+        {
+            if (arg == L"--events")
+            {
+                if (i + 1 >= argc || std::wstring_view{argv[i + 1]} != L"jsonl")
+                    throw std::runtime_error(
+                        "--events requires jsonl");
+                ++i;
+            }
+
+            options.machine_readable = true;
+            continue;
+        }
+
+        if (arg == L"--test-mode")
+        {
+            options.test_mode = true;
             continue;
         }
         throw std::runtime_error(
