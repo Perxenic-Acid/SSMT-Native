@@ -22,9 +22,19 @@ int wmain(
 			break;
 		}
 	}
-	const HANDLE machine_output = GetStdHandle(STD_OUTPUT_HANDLE);
+	HANDLE machine_output = GetStdHandle(STD_OUTPUT_HANDLE);
 	if (machineRequested)
 	{
+		// 保留 CRT 已重定向的 stdout 句柄，随后把人工日志移到 stderr。
+		// Start-Process 的文件重定向不保证 GetStdHandle 与 CRT 指向同一对象。
+		const auto stdout_handle = _get_osfhandle(_fileno(stdout));
+		if (stdout_handle != -1)
+		{
+			HANDLE duplicate = nullptr;
+			if (DuplicateHandle(GetCurrentProcess(), reinterpret_cast<HANDLE>(stdout_handle),
+				GetCurrentProcess(), &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS))
+				machine_output = duplicate;
+		}
 		_dup2(_fileno(stderr), _fileno(stdout));
 	}
 	LaunchEventEmitter events(machineRequested, machine_output);

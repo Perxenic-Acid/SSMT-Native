@@ -32,6 +32,7 @@ if(MSVC)
         /W3
         /permissive-
         /sdl
+        /utf-8
     )
 
     target_link_options(3Dmigoto-Injector-V2 PRIVATE
