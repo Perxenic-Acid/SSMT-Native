@@ -136,57 +136,6 @@ private:
         wcsncpy_s(runPath, MAX_PATH, ini.launch.c_str(), _TRUNCATE);
         wcsncpy_s(runArgs, MAX_PATH, ini.launch_args.c_str(), _TRUNCATE);
 
-        if (ini.inject_dlls.empty())
-        {
-            printf("[Loader] Launching target with ShellExecute: %S\n", runPath);
-            const HRESULT coInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-            wchar_t *workingDirPtr = InjectorUtils::DeduceWorkingDirectory(runPath, workingDir);
-            HINSTANCE result = ShellExecuteW(nullptr, nullptr, runPath, runArgs, workingDirPtr, SW_SHOWNORMAL);
-            const bool launched = (reinterpret_cast<INT_PTR>(result) > 32);
-            if (!launched)
-            {
-                printf("[Loader] ShellExecute failed: %Id\n", reinterpret_cast<INT_PTR>(result));
-                events.emit_error("target_launch", "shell_execute_failed", "ShellExecute failed");
-            }
-
-            bool ok = false;
-            if (launched)
-            {
-                wchar_t moduleFullPath[MAX_PATH] = {};
-                HMODULE localModule = LoadLibraryW(ini.module.c_str());
-                if (!localModule || !GetModuleFileNameW(localModule, moduleFullPath, MAX_PATH))
-                {
-                    printf("[Loader] Failed to resolve 3DMigoto module path: %lu\n", GetLastError());
-                    events.emit_error("runtime", "module_resolve_failed", "Failed to resolve 3DMigoto module path");
-                }
-                else
-                {
-                    ok = InjectorUtils::WaitForTarget(
-                        ini.ToByteString(ini.target).c_str(),
-                        moduleFullPath,
-                        true,
-                        ParseDelay(delayStr),
-                        true);
-                }
-            }
-
-            UnhookWindowsHookEx(d3d11Hook);
-            if (SUCCEEDED(coInit))
-            {
-                CoUninitialize();
-            }
-            if (ok)
-            {
-                events.emit("runtime_detected");
-                events.emit("launch_complete");
-            }
-            else
-            {
-                events.emit_error("runtime", "runtime_not_detected", "3DMigoto runtime was not detected");
-            }
-            return ok;
-        }
-
         wchar_t *filePart = nullptr;
         DWORD pathLen = GetFullPathNameW(runPath, MAX_PATH, workingDir, &filePart);
         if (pathLen == 0 || pathLen >= MAX_PATH || !filePart)
