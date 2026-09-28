@@ -13,6 +13,8 @@ pub struct SsmtD3D11Context {
     pub struct_size: u32,
     pub abi_version: u32,
 
+    // Borrowed Runtime wrapper pointers. The host does not AddRef them; plugins
+    // must AddRef/Release explicitly if they retain an interface past callback.
     // ID3D11Device*
     pub device: *mut c_void,
     // ID3D11DeviceContext*
@@ -52,7 +54,7 @@ pub struct SsmtPresentContext {
     pub struct_size: u32,
     pub abi_version: u32,
 
-    // Borrowed COM interface pointers. They are only valid for the callback.
+    // Borrowed Runtime wrapper pointers; retention requires AddRef/Release.
     pub device: *mut c_void,
     pub immediate_context: *mut c_void,
     pub swap_chain: *mut c_void,

@@ -266,6 +266,22 @@ private:
             }
         }
 
+        // Never resume a target after a required injection failed. Continuing
+        // here leaves the game in a partially injected state: the caller sees
+        // a launch attempt, while the target can later fail during graphics
+        // initialization with no useful loader error. The process is still
+        // suspended, so cleanup is deterministic and does not touch an
+        // already-running game.
+        if (!extraOk || !pluginHostOk)
+        {
+            events.emit_error("preflight", "required_injection_failed", "Required DLL injection failed");
+            TerminateProcess(pi.hProcess, ERROR_DLL_INIT_FAILED);
+            UnhookWindowsHookEx(d3d11Hook);
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+            return false;
+        }
+
         if (!WaitBeforeResume(options, pi, events))
         {
             TerminateProcess(pi.hProcess, ERROR_CANCELLED);
