@@ -1,0 +1,27 @@
+name: Publish official SSMT plugins
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  plugin-assets:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 打包官方插件和目录
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: ./tools/pack-official-plugins.ps1 -ReleaseTag $env:RELEASE_TAG
+      - name: 上传 Native Release 资产
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          $assets = @(Get-ChildItem -LiteralPath dist/plugin-release -File | ForEach-Object FullName)
+          gh release upload $env:RELEASE_TAG @assets
