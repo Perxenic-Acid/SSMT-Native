@@ -11,6 +11,7 @@ struct LoaderOptions
         plugin_host_config;
     bool machine_readable = false;
     bool test_mode = false;
+    bool preload_runtime = false;
     std::optional<std::wstring> launch_barrier_id;
 };
 
@@ -55,6 +56,11 @@ inline LoaderOptions ParseLoaderOptions(
         if (arg == L"--test-mode")
         {
             options.test_mode = true;
+            continue;
+        }
+        if (arg == L"--preload-runtime")
+        {
+            options.preload_runtime = true;
             continue;
         }
 

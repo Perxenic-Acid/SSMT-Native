@@ -28,6 +28,7 @@ target_compile_definitions(3Dmigoto-Injector-V2 PRIVATE
 )
 
 if(MSVC)
+    option(SSMT_INJECTOR_REQUIRE_ADMIN "Require elevation for the injector" ON)
     target_compile_options(3Dmigoto-Injector-V2 PRIVATE
         /W3
         /permissive-
@@ -35,8 +36,13 @@ if(MSVC)
         /utf-8
     )
 
+    if(SSMT_INJECTOR_REQUIRE_ADMIN)
+        set(SSMT_INJECTOR_UAC_LEVEL requireAdministrator)
+    else()
+        set(SSMT_INJECTOR_UAC_LEVEL asInvoker)
+    endif()
     target_link_options(3Dmigoto-Injector-V2 PRIVATE
         /MANIFEST:EMBED
-        "/MANIFESTUAC:level='requireAdministrator' uiAccess='false'"
+        "/MANIFESTUAC:level='${SSMT_INJECTOR_UAC_LEVEL}' uiAccess='false'"
     )
 endif()

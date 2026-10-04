@@ -45,6 +45,11 @@ public:
         printf("[Loader] Starting injection.\n");
         if (ini.launch.empty())
         {
+            if (options.preload_runtime)
+            {
+                events.emit_error("preflight", "preload_requires_launch", "Runtime preloading requires launch mode");
+                return false;
+            }
             printf("[Loader] No launch configured; waiting for target process.\n");
             return FallbackWaitMode(ini, events);
         }
@@ -123,8 +128,22 @@ private:
         LaunchEventEmitter &events)
     {
         printf("[Loader] Launch-and-inject mode selected.\n");
-        HHOOK d3d11Hook = InstallGlobalCbtHook(ini.module.c_str());
-        if (!d3d11Hook)
+        HHOOK d3d11Hook = nullptr;
+        std::filesystem::path preloadPath;
+        if (options.preload_runtime)
+        {
+            preloadPath = std::filesystem::absolute(ini.module);
+            if (!std::filesystem::is_regular_file(preloadPath))
+            {
+                events.emit_error("preflight", "runtime_missing", "Runtime DLL does not exist");
+                return false;
+            }
+        }
+        else
+        {
+            d3d11Hook = InstallGlobalCbtHook(ini.module.c_str());
+        }
+        if (!options.preload_runtime && !d3d11Hook)
         {
             events.emit_error("prepare", "hook_install_failed", "Failed to install global CBT hook");
             return false;
@@ -142,7 +161,8 @@ private:
         {
             printf("[Loader] Failed to resolve launch working directory: %lu\n", GetLastError());
             events.emit_error("target_launch", "working_directory_failed", "Failed to resolve launch working directory");
-            UnhookWindowsHookEx(d3d11Hook);
+            if (d3d11Hook)
+                UnhookWindowsHookEx(d3d11Hook);
             return false;
         }
         *filePart = L'\0';
@@ -177,11 +197,27 @@ private:
         {
             printf("[Loader] CreateProcess failed: %lu\n", GetLastError());
             events.emit_error("target_launch", "create_process_failed", "CreateProcess failed");
-            UnhookWindowsHookEx(d3d11Hook);
+            if (d3d11Hook)
+                UnhookWindowsHookEx(d3d11Hook);
             return false;
         }
 
         events.emit_pid("target_created", pi.dwProcessId);
+
+        if (options.preload_runtime)
+        {
+            const auto runtimePath = preloadPath.wstring();
+            events.emit_module("inject_begin", runtimePath.c_str());
+            if (!NtInjectDll(pi.hProcess, runtimePath.c_str()))
+            {
+                events.emit_error("inject", "runtime_preload_failed", "Runtime preload failed");
+                TerminateProcess(pi.hProcess, ERROR_DLL_INIT_FAILED);
+                CloseHandle(pi.hThread);
+                CloseHandle(pi.hProcess);
+                return false;
+            }
+            events.emit_module("inject_complete", runtimePath.c_str());
+        }
 
         bool extraOk = true;
 
@@ -276,7 +312,8 @@ private:
         {
             events.emit_error("preflight", "required_injection_failed", "Required DLL injection failed");
             TerminateProcess(pi.hProcess, ERROR_DLL_INIT_FAILED);
-            UnhookWindowsHookEx(d3d11Hook);
+            if (d3d11Hook)
+                UnhookWindowsHookEx(d3d11Hook);
             CloseHandle(pi.hThread);
             CloseHandle(pi.hProcess);
             return false;
@@ -285,7 +322,8 @@ private:
         if (!WaitBeforeResume(options, pi, events))
         {
             TerminateProcess(pi.hProcess, ERROR_CANCELLED);
-            UnhookWindowsHookEx(d3d11Hook);
+            if (d3d11Hook)
+                UnhookWindowsHookEx(d3d11Hook);
             CloseHandle(pi.hThread);
             CloseHandle(pi.hProcess);
             return false;
@@ -325,10 +363,11 @@ private:
 
         case ModuleWaitResult::VerificationDenied:
             printf(
-                "[Loader] 3Dmigoto module verification was denied; "
-                "assuming success.\n");
+                "[Loader] 3DMigoto module verification was denied; "
+                "injection status is unknown.\n");
             moduleOk = true;
-            events.emit("runtime_detected");
+            // 受保护进程仍按原有启动结果处理，但未观测到模块时不能报告已检测到运行时。
+            events.emit("runtime_verification_unavailable");
             break;
 
         case ModuleWaitResult::TimedOut:
@@ -347,7 +386,8 @@ private:
         //     printf("[Loader] Timed out waiting for 3DMigoto module.\n");
         // }
 
-        UnhookWindowsHookEx(d3d11Hook);
+        if (d3d11Hook)
+            UnhookWindowsHookEx(d3d11Hook);
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
 
@@ -783,20 +823,21 @@ private:
 #ifdef _DEBUG
         printf("[Loader] NT functions resolved.\n");
 #endif
-        SIZE_T len =
+        const SIZE_T pathBytes =
             (wcslen(dllPath) + 1) * sizeof(wchar_t);
+        SIZE_T allocationSize = pathBytes;
 
         PVOID remote = nullptr;
 #ifdef _DEBUG
         printf(
             "[Loader] Allocating %zu bytes in target process...\n",
-            len);
+            pathBytes);
 #endif
         NTSTATUS status = ntAlloc(
             process,
             &remote,
             0,
-            &len,
+            &allocationSize,
             MEM_COMMIT | MEM_RESERVE,
             PAGE_READWRITE);
 
@@ -820,17 +861,17 @@ private:
             process,
             remote,
             const_cast<wchar_t *>(dllPath),
-            len,
+            pathBytes,
             &written);
 
-        if (status != 0 || written != len)
+        if (status != 0 || written != pathBytes)
         {
             printf(
                 "[Loader] NtWriteVirtualMemory failed: "
                 "status=0x%X, written=%zu/%zu\n",
                 status,
                 written,
-                len);
+                pathBytes);
             return false;
         }
 #ifdef _DEBUG
@@ -946,7 +987,8 @@ private:
             return nullptr;
         }
 
-        SIZE_T size = (value.size() + 1) * sizeof(wchar_t);
+        const SIZE_T stringBytes = (value.size() + 1) * sizeof(wchar_t);
+        SIZE_T allocationSize = stringBytes;
 
         PVOID remote = nullptr;
 
@@ -955,7 +997,7 @@ private:
                 process,
                 &remote,
                 0,
-                &size,
+                &allocationSize,
                 MEM_COMMIT | MEM_RESERVE,
                 PAGE_READWRITE);
 
@@ -975,18 +1017,18 @@ private:
             remote,
             const_cast<wchar_t *>(
                 value.c_str()),
-            size,
+            stringBytes,
             &written);
 
         if (status != 0 ||
-            written != size)
+            written != stringBytes)
         {
             printf(
                 "[Loader] Failed to write remote string: "
                 "status=0x%X, written=%zu/%zu\n",
                 status,
                 written,
-                size);
+                stringBytes);
 
             return nullptr;
         }
