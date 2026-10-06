@@ -15,6 +15,7 @@ namespace SSMT::Tweaks::Genshin
         bool enabled = true;
 
         FpsUnlockConfig fpsUnlock;
+        bool fastTeamPage = true;
         CameraPolicyConfig camera;
     };
 

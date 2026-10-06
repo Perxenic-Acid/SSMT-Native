@@ -51,7 +51,7 @@ namespace SSMT::Tweaks::Genshin
         std::error_code fileError;
         if (path.empty() || !std::filesystem::is_regular_file(path, fileError))
         {
-            log << "Camera config missing; using safe defaults.\n";
+            log << "Player Tweaks config missing; using defaults.\n";
             return config;
         }
 
@@ -67,7 +67,11 @@ namespace SSMT::Tweaks::Genshin
         camera.disableTransitionBlend = ReadBool(file, L"DisableTransitionBlend", camera.disableTransitionBlend);
         camera.disableCharacterFade = ReadBool(file, L"DisableCharacterFade", camera.disableCharacterFade);
         camera.disableEventCameraMovement = ReadBool(file, L"DisableEventCameraMovement", camera.disableEventCameraMovement);
-        log << "Camera config loaded from plugin directory.\n";
+        config.fpsUnlock.enabled = GetPrivateProfileIntW(L"Gameplay", L"FpsUnlock", config.fpsUnlock.enabled ? 1 : 0, file) != 0;
+        const int targetFps = GetPrivateProfileIntW(L"Gameplay", L"TargetFps", config.fpsUnlock.targetFps, file);
+        if (targetFps >= 30 && targetFps <= 240) config.fpsUnlock.targetFps = targetFps;
+        config.fastTeamPage = GetPrivateProfileIntW(L"Gameplay", L"FastTeamPage", config.fastTeamPage ? 1 : 0, file) != 0;
+        log << "Player Tweaks config loaded from plugin directory.\n";
         return config;
     }
 }

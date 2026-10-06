@@ -8,6 +8,7 @@
 #include "Games/Genshin/GenshinConfig.h"
 
 #include <ostream>
+#include <exception>
 
 namespace SSMT::Tweaks::Genshin
 {
@@ -18,14 +19,21 @@ namespace SSMT::Tweaks::Genshin
     {
         const GenshinConfig config = LoadGenshinConfig(pluginModule, log);
 
-        CameraTweaks::Initialize(patternScanner, config.camera, log);
+        try { CameraTweaks::Initialize(patternScanner, config.camera, log); }
+        catch (const std::exception &error) { log << "Camera unavailable: " << error.what() << '\n'; }
 
-        FpsUnlock::Initialize(
-            patternScanner,
-            log);
+        if (config.fpsUnlock.enabled)
+        {
+            try { FpsUnlock::Initialize(patternScanner, config.fpsUnlock, log); }
+            catch (const std::exception &error) { log << "FpsUnlock unavailable: " << error.what() << '\n'; }
+        }
+        else log << "FpsUnlock disabled by game settings.\n";
 
-        FastTeamPage::Initialize(
-            patternScanner,
-            log);
+        if (config.fastTeamPage)
+        {
+            try { FastTeamPage::Initialize(patternScanner, log); }
+            catch (const std::exception &error) { log << "FastTeamPage unavailable: " << error.what() << '\n'; }
+        }
+        else log << "FastTeamPage disabled by game settings.\n";
     }
 } // namespace SSMT::Tweaks::Genshin

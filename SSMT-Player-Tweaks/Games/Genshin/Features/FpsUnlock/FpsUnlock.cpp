@@ -2,6 +2,7 @@
 
 #include "Core/PatternScanner.h"
 #include "Core/HookManager.h"
+#include "Core/SymbolResolver.h"
 #include "Games/Genshin/GenshinPatterns.h"
 
 #include <cstdint>
@@ -22,16 +23,14 @@ namespace SSMT::Tweaks::Genshin::FpsUnlock
             wchar_t localAppData[MAX_PATH]{};
             const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, MAX_PATH);
             if (length == 0 || length >= MAX_PATH)
-                throw std::runtime_error("[get log: boom]");
+                return {};
             const std::filesystem::path logPath = std::filesystem::path(localAppData) / L"SSMT4CachedFolder" / L"Logs" / L"SSMT-Player-Tweaks.log";
             return std::ofstream(logPath, std::ios::app);
         }
 
-        std::atomic<std::uint64_t>
-            g_getFrameCountCalls{0};
-
         std::atomic<ULONGLONG>
             g_lastLogTime{0};
+        std::int32_t g_targetFrameRate = 120;
 
         using GetFrameCountFn = std::int32_t (*)();
 
@@ -77,30 +76,27 @@ namespace SSMT::Tweaks::Genshin::FpsUnlock
                 g_originalSetSyncCount(0);
             }
 
-            constexpr std::int32_t targetFrameRate = 120;
-
             const std::int32_t oldFrameCount = frameCount;
 
             if (
                 g_setFrameCount != nullptr &&
-                frameCount != targetFrameRate)
+                frameCount != g_targetFrameRate)
             {
-                g_setFrameCount(targetFrameRate);
+                g_setFrameCount(g_targetFrameRate);
 
                 frameCount = g_originalGetFrameCount();
 
                 auto currTime = GetTickCount64();
 
-                auto log = get_log();
-
-                if (log.is_open())
+                auto previousLog = g_lastLogTime.load(std::memory_order_relaxed);
+                if (currTime - previousLog >= 5000 &&
+                    g_lastLogTime.compare_exchange_strong(previousLog, currTime,
+                        std::memory_order_relaxed))
                 {
-                    log << currTime
-                        << "[Fps Unlock] "
-                        << oldFrameCount
-                        << " -> "
-                        << frameCount
-                        << '\n';
+                    auto log = get_log();
+                    if (log.is_open())
+                        log << currTime << "[Fps Unlock] " << oldFrameCount
+                            << " -> " << frameCount << '\n';
                 }
             }
 
@@ -119,66 +115,41 @@ namespace SSMT::Tweaks::Genshin::FpsUnlock
 
     void Initialize(
         PatternScanner &patternScanner,
+        const FpsUnlockConfig &config,
         std::ostream &log)
     {
-        const auto getFrameCountAddresses =
-            patternScanner.FindAll(Patterns::GetFrameCount);
+        const auto getFrameCount = ResolveSymbol(patternScanner,
+            Patterns::GetFrameCount, ResolverKind::RelativeBranch);
+        const auto setFrameCount = ResolveSymbol(patternScanner,
+            Patterns::SetFrameCount, ResolverKind::RelativeBranch);
+        if (!getFrameCount || !setFrameCount)
+            throw std::runtime_error("FPS getter/setter symbol unavailable: " +
+                getFrameCount.validation + ", " + setFrameCount.validation);
 
-        if (getFrameCountAddresses.size() != 1)
-            throw std::runtime_error(
-                "FpsUnlock: "
-                "GetFrameCount pattern match count is not 1.");
-
-        const auto setFrameCountAddresses =
-            patternScanner.FindAll(Patterns::SetFrameCount);
-
-        if (setFrameCountAddresses.size() != 1)
-            throw std::runtime_error(
-                "FpsUnlock: "
-                "SetFrameCount pattern match count is not 1.");
-
-        const std::uintptr_t getFrameCountAddress =
-            PatternScanner::ResolveRelativeCall(
-                getFrameCountAddresses.front());
-
-        const std::uintptr_t setFrameCountAddress =
-            PatternScanner::ResolveRelativeCall(
-                setFrameCountAddresses.front());
-
-        g_setFrameCount =
-            reinterpret_cast<SetFrameCountFn>(setFrameCountAddress);
-
-        const auto setSyncCountAddresses = patternScanner.FindAll(Patterns::SetSyncCount);
-
-        if (setSyncCountAddresses.size() != 1)
-            throw std::runtime_error(
-                "FpsUnlock: "
-                "SetSyncCount pattern match count is not 1.");
-
-        const std::uintptr_t setSyncCountAddress =
-            PatternScanner::ResolveRelativeCall(setSyncCountAddresses.front());
-
-        // g_setSyncCount =
-        //     reinterpret_cast<SetSyncCountFn>(
-        //         setSyncCountAddress);
-
-        HookManager::Create(
-            setSyncCountAddress,
-            reinterpret_cast<void *>(
-                &HookedSetSyncCount),
-            reinterpret_cast<void **>(
-                &g_originalSetSyncCount));
-
-        log << "SetSyncCount RVA: 0x"
-            << std::hex
-            << setSyncCountAddress - patternScanner.BaseAddress()
-            << '\n';
-
-        HookManager::Create(
-            getFrameCountAddress,
+        g_targetFrameRate = config.targetFps;
+        g_setFrameCount = reinterpret_cast<SetFrameCountFn>(setFrameCount.address);
+        HookManager::Create(getFrameCount.address,
             reinterpret_cast<void *>(&HookedGetFrameCount),
             reinterpret_cast<void **>(&g_originalGetFrameCount));
+        log << "FpsUnlock enabled: target=" << g_targetFrameRate << ".\n";
 
-        log << "FpsUnlock functions initialized.\n";
+        const auto setSyncCount = ResolveSymbol(patternScanner,
+            Patterns::SetSyncCount, ResolverKind::RelativeBranch);
+        if (!setSyncCount)
+        {
+            log << "FpsUnlock VSync hook unavailable: " << setSyncCount.validation << '\n';
+            return;
+        }
+        try
+        {
+            HookManager::Create(setSyncCount.address,
+                reinterpret_cast<void *>(&HookedSetSyncCount),
+                reinterpret_cast<void **>(&g_originalSetSyncCount));
+            log << "FpsUnlock VSync hook enabled.\n";
+        }
+        catch (const std::exception &error)
+        {
+            log << "FpsUnlock VSync hook unavailable: " << error.what() << '\n';
+        }
     }
 } // namespace SSMT::Tweaks::Genshin::FpsUnlock
