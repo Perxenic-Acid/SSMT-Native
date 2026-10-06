@@ -1,6 +1,7 @@
 #pragma once
 
 #include <iosfwd>
+#include <Windows.h>
 
 namespace SSMT::Tweaks
 {
@@ -10,7 +11,8 @@ namespace SSMT::Tweaks
     {
         void Initialize(
             PatternScanner &patternScanner,
-            std::ostream &log
+            std::ostream &log,
+            HMODULE pluginModule
         );
     } // namespace Genshin
     

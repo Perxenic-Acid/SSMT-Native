@@ -23,13 +23,19 @@ add_library(SSMT-Player-Tweaks SHARED
     Core/PatternScanner.h
 
     Core/Pattern.h
+    Core/CameraPolicy.cpp
+    Core/CameraPolicy.h
+    Core/SymbolResolver.cpp
+    Core/SymbolResolver.h
 
     Games/Genshin/GenshinPatterns.cpp
     Games/Genshin/GenshinPatterns.h
 
-    Games/Genshin/Features/AntiCharacterFade/AntiCharacterFade.cpp
-    Games/Genshin/Features/AntiCharacterFade/AntiCharacterFade.h
-    Games/Genshin/Features/AntiCharacterFade/AntiCharacterFadeConfig.h
+    Games/Genshin/Features/CameraTweaks/CameraTweaks.cpp
+    Games/Genshin/Features/CameraTweaks/CameraTweaks.h
+    Games/Genshin/GenshinCameraBridge.cpp
+    Games/Genshin/GenshinCameraBridge.h
+    Games/Genshin/GenshinConfig.cpp
 
     Games/Genshin/Features/FpsUnlock/FpsUnlock.h
     Games/Genshin/Features/FpsUnlock/FpsUnlock.cpp
@@ -55,6 +61,19 @@ target_include_directories(SSMT-Player-Tweaks PRIVATE
 target_link_libraries(SSMT-Player-Tweaks PRIVATE
     minhook
 )
+
+if(MSVC)
+    target_compile_options(SSMT-Player-Tweaks PRIVATE /utf-8)
+endif()
+
+add_executable(CameraPolicyTests
+    Tests/CameraPolicyTests.cpp
+    Core/CameraPolicy.cpp
+)
+target_include_directories(CameraPolicyTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+if(MSVC)
+    target_compile_options(CameraPolicyTests PRIVATE /utf-8)
+endif()
 
 target_include_directories(SSMT-Player-Tweaks PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}

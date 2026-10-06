@@ -81,7 +81,8 @@ namespace SSMT::Tweaks
 
                 Genshin::Initialize(
                     patternScanner,
-                    log);
+                    log,
+                    static_cast<HMODULE>(parameter));
 
                 break;
 

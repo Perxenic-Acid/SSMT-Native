@@ -4,6 +4,40 @@
 
 namespace SSMT::Tweaks::Genshin::Patterns
 {
+    inline constexpr std::string_view ChangeFov =
+        "40 53 48 83 EC 60 0F 29 74 24 ?? 48 8B D9 0F 28 F1 "
+        "E8 ?? ?? ?? ?? 48 85 C0 0F 84 ?? ?? ?? ?? "
+        "E8 ?? ?? ?? ?? 48 8B C8";
+
+    inline constexpr std::string_view CameraUpdateView =
+        "56 48 83 EC 40 0F 29 7C 24 30 0F 29 74 24 20 48 89 CE "
+        "F3 0F 10 71 70 F3 0F 10 79 78 F3 0F 5C F7 "
+        "F3 0F 59 B1 80 00 00 00 E8 ??";
+
+    inline constexpr std::string_view CameraStateBlenderTick =
+        "41 57 41 56 41 55 41 54 56 57 55 53 "
+        "B8 88 18 00 00 E8 ?? ?? ?? ?? 48 29 C4 "
+        "44 0F 29 8C 24 70 18 00 00";
+
+    inline constexpr std::string_view EventCamera =
+        "41 57 41 56 56 57 55 53 48 83 EC 48 48 89 D7 49 89 CE "
+        "80 3D ?? ?? ?? ?? 00 0F 85 ?? ?? ?? ?? 80";
+
+    inline constexpr std::string_view FindGameObject =
+        "40 53 48 83 EC ?? 48 89 4C 24 ?? 48 8D 54 24 ?? "
+        "48 8D 4C 24 ?? E8 ?? ?? ?? ?? 48 8B 08 48 85 C9 "
+        "75 ?? 48 8D 48 ?? E8 ?? ?? ?? ?? 48 8B 4C 24 ?? "
+        "48 8B D8 48 85 C9 74 ?? 48 83 7C 24 ?? 00 76";
+
+    inline constexpr std::string_view FindString =
+        "56 48 83 EC 20 48 89 CE E8 ?? ?? ?? ?? 48 89 F1 "
+        "89 C2 48 83 C4 20 5E E9 ?? ?? ?? ?? CC CC CC CC";
+
+    inline constexpr std::string_view GetActive =
+        "E8 ?? ?? ?? ?? 84 C0 74 ?? 48 89 F1 E8 ?? ?? ?? ?? "
+        "48 8B 4E ?? 48 85 C9 0F 84 ?? ?? ?? ?? "
+        "80 79 ?? ?? 0F 94 C1 08 C1";
+
     inline constexpr std::string_view PlayerPerspective =
         "E8 ?? ?? ?? ?? 48 8B BE ?? ?? ?? ?? "
         "80 3D ?? ?? ?? ?? ?? "

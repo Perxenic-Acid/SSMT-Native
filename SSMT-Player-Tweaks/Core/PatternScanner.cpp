@@ -223,7 +223,7 @@ namespace SSMT::Tweaks
         }
         return result;
     }
-    auto PatternScanner::IsExecutableAddress(std::uintptr_t address) const
+    bool PatternScanner::IsExecutableAddress(std::uintptr_t address) const
     {
         for (const auto &section : executable_sections_)
         {
@@ -232,10 +232,51 @@ namespace SSMT::Tweaks
 
             if (address >= begin && address < end)
             {
-                return true;
+                MEMORY_BASIC_INFORMATION region{};
+                if (VirtualQuery(reinterpret_cast<const void *>(address), &region, sizeof(region)) != sizeof(region)) return false;
+                if (region.State != MEM_COMMIT || (region.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0) return false;
+                const DWORD access = region.Protect & 0xFF;
+                return access == PAGE_EXECUTE || access == PAGE_EXECUTE_READ ||
+                    access == PAGE_EXECUTE_READWRITE || access == PAGE_EXECUTE_WRITECOPY;
             }
         }
         return false;
+    }
+    bool PatternScanner::IsAddressInModule(std::uintptr_t address, std::size_t size) const
+    {
+        return address >= base_address_ && size > 0 &&
+            address - base_address_ < image_size_ &&
+            size <= image_size_ - (address - base_address_);
+    }
+    bool PatternScanner::IsReadableAddress(std::uintptr_t address, std::size_t size) const
+    {
+        if (!IsAddressInModule(address, size)) return false;
+        MEMORY_BASIC_INFORMATION region{};
+        if (VirtualQuery(reinterpret_cast<const void *>(address), &region, sizeof(region)) != sizeof(region)) return false;
+        if (region.State != MEM_COMMIT || (region.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0) return false;
+        const auto regionStart = reinterpret_cast<std::uintptr_t>(region.BaseAddress);
+        const DWORD access = region.Protect & 0xFF;
+        const bool readable = access == PAGE_READONLY || access == PAGE_READWRITE ||
+            access == PAGE_WRITECOPY || access == PAGE_EXECUTE_READ ||
+            access == PAGE_EXECUTE_READWRITE || access == PAGE_EXECUTE_WRITECOPY;
+        return readable && address >= regionStart &&
+            size <= region.RegionSize - (address - regionStart);
+    }
+    bool PatternScanner::MatchBytes(std::uintptr_t address, const std::uint8_t *bytes, std::size_t size) const
+    {
+        return bytes && IsReadableAddress(address, size) &&
+            std::memcmp(reinterpret_cast<const void *>(address), bytes, size) == 0;
+    }
+    std::uintptr_t PatternScanner::ResolveRelativeBranch(std::uintptr_t address) const
+    {
+        if (!IsExecutableAddress(address) || !IsReadableAddress(address, 5)) return 0;
+        const auto opcode = *reinterpret_cast<const std::uint8_t *>(address);
+        if (opcode != 0xE8 && opcode != 0xE9) return 0;
+        std::int32_t displacement{};
+        std::memcpy(&displacement, reinterpret_cast<const void *>(address + 1), sizeof(displacement));
+        const auto target = static_cast<std::uintptr_t>(
+            static_cast<std::intptr_t>(address + 5) + displacement);
+        return IsExecutableAddress(target) && IsReadableAddress(target) ? target : 0;
     }
     std::uintptr_t PatternScanner::ResolveRelativeCall(
         std::uintptr_t address)

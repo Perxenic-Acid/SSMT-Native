@@ -39,7 +39,15 @@ namespace SSMT::Tweaks
         std::vector<std::uintptr_t> FindAll(std::string_view pattern) const;
 
         [[nodiscard]]
-        auto IsExecutableAddress(std::uintptr_t address) const;
+        bool IsExecutableAddress(std::uintptr_t address) const;
+        [[nodiscard]]
+        bool IsAddressInModule(std::uintptr_t address, std::size_t size = 1) const;
+        [[nodiscard]]
+        bool IsReadableAddress(std::uintptr_t address, std::size_t size = 1) const;
+        [[nodiscard]]
+        bool MatchBytes(std::uintptr_t address, const std::uint8_t *bytes, std::size_t size) const;
+        [[nodiscard]]
+        std::uintptr_t ResolveRelativeBranch(std::uintptr_t address) const;
         [[nodiscard]]
         static std::uintptr_t ResolveRelativeCall(std::uintptr_t address);
 

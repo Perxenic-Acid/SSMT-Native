@@ -1,9 +1,11 @@
 #pragma once
 
-#include "Features/AntiCharacterFade/AntiCharacterFadeConfig.h"
+#include "Core/CameraPolicy.h"
 #include "Features/FpsUnlock/FpsUnlockConfig.h"
 
+#include <Windows.h>
 #include <cstdint>
+#include <ostream>
 
 namespace SSMT::Tweaks::Genshin
 {
@@ -13,7 +15,9 @@ namespace SSMT::Tweaks::Genshin
         bool enabled = true;
 
         FpsUnlockConfig fpsUnlock;
-        AntiCharacterFadeConfig antiCharacterFade;
+        CameraPolicyConfig camera;
     };
+
+    GenshinConfig LoadGenshinConfig(HMODULE pluginModule, std::ostream &log);
 
 } // namespace SSMT::Tweaks::Genshin
