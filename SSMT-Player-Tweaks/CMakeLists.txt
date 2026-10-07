@@ -33,6 +33,8 @@ add_library(SSMT-Player-Tweaks SHARED
 
     Games/Genshin/Features/CameraTweaks/CameraTweaks.cpp
     Games/Genshin/Features/CameraTweaks/CameraTweaks.h
+    Games/Genshin/Features/CameraTweaks/CameraZoom.h
+    Games/Genshin/Features/CameraTweaks/CameraZoom.cpp
     Games/Genshin/GenshinCameraBridge.cpp
     Games/Genshin/GenshinCameraBridge.h
     Games/Genshin/GenshinConfig.cpp
@@ -73,6 +75,20 @@ add_executable(CameraPolicyTests
 target_include_directories(CameraPolicyTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 if(MSVC)
     target_compile_options(CameraPolicyTests PRIVATE /utf-8)
+endif()
+
+add_executable(CameraZoomTests
+    Tests/CameraZoomTests.cpp
+    Core/PatternScanner.cpp
+    Core/SymbolResolver.cpp
+    Core/HookManager.cpp
+    Games/Genshin/GenshinCameraBridge.cpp
+    Games/Genshin/Features/CameraTweaks/CameraZoom.cpp
+)
+target_link_libraries(CameraZoomTests PRIVATE minhook)
+target_include_directories(CameraZoomTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+if(MSVC)
+    target_compile_options(CameraZoomTests PRIVATE /utf-8)
 endif()
 
 target_include_directories(SSMT-Player-Tweaks PRIVATE

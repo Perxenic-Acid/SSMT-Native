@@ -16,6 +16,7 @@ namespace SSMT::Tweaks
         bool disableTransitionBlend = false;
         bool disableCharacterFade = true;
         bool disableEventCameraMovement = false;
+        bool cameraZoom = false;
     };
 
     struct CameraContext

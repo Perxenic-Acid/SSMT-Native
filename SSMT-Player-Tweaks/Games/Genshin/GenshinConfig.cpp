@@ -67,6 +67,7 @@ namespace SSMT::Tweaks::Genshin
         camera.disableTransitionBlend = ReadBool(file, L"DisableTransitionBlend", camera.disableTransitionBlend);
         camera.disableCharacterFade = ReadBool(file, L"DisableCharacterFade", camera.disableCharacterFade);
         camera.disableEventCameraMovement = ReadBool(file, L"DisableEventCameraMovement", camera.disableEventCameraMovement);
+        camera.cameraZoom = ReadBool(file, L"CameraZoom", camera.cameraZoom);
         config.fpsUnlock.enabled = GetPrivateProfileIntW(L"Gameplay", L"FpsUnlock", config.fpsUnlock.enabled ? 1 : 0, file) != 0;
         const int targetFps = GetPrivateProfileIntW(L"Gameplay", L"TargetFps", config.fpsUnlock.targetFps, file);
         if (targetFps >= 30 && targetFps <= 240) config.fpsUnlock.targetFps = targetFps;

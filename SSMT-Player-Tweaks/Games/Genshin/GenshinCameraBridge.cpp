@@ -1,11 +1,30 @@
 #include "GenshinCameraBridge.h"
 
 #include "GenshinPatterns.h"
+#include "Features/CameraTweaks/CameraZoom.h"
 
 namespace SSMT::Tweaks::Genshin
 {
     namespace
     {
+        using CameraTweaks::ZoomFunction;
+        bool ValidateInputTick(const PatternScanner &scanner, std::uintptr_t address)
+        { return CameraTweaks::ValidateZoomFunction(scanner, address, ZoomFunction::InputTick); }
+        bool ValidateInputAdjust(const PatternScanner &scanner, std::uintptr_t address)
+        { return CameraTweaks::ValidateZoomFunction(scanner, address, ZoomFunction::InputAdjust); }
+        bool ValidateManualRatio(const PatternScanner &scanner, std::uintptr_t address)
+        { return CameraTweaks::ValidateZoomFunction(scanner, address, ZoomFunction::UpdateManualRatio); }
+        bool ValidateScriptedRatio(const PatternScanner &scanner, std::uintptr_t address)
+        { return CameraTweaks::ValidateZoomFunction(scanner, address, ZoomFunction::ScriptedManualRatio); }
+        bool ValidateDistanceLimit(const PatternScanner &scanner, std::uintptr_t address)
+        { return CameraTweaks::ValidateZoomFunction(scanner, address, ZoomFunction::DistanceLimit); }
+        bool ValidateRadiusUpdate(const PatternScanner &scanner, std::uintptr_t address)
+        { return CameraTweaks::ValidateZoomFunction(scanner, address, ZoomFunction::RadiusUpdate); }
+        bool ValidateRadiusSmoothDamp(const PatternScanner &scanner, std::uintptr_t address)
+        { return CameraTweaks::ValidateZoomFunction(scanner, address, ZoomFunction::RadiusSmoothDamp); }
+        bool ValidateCollectAvatarState(const PatternScanner &scanner, std::uintptr_t address)
+        { return CameraTweaks::ValidateZoomFunction(scanner, address, ZoomFunction::CollectAvatarState); }
+
         bool ValidateUpdateView(const PatternScanner &scanner, std::uintptr_t address)
         {
             // 同一 AOB 还会命中内联 Update；输入专用函数拥有这个独立的尾部。
@@ -78,6 +97,25 @@ namespace SSMT::Tweaks::Genshin
         std::ostream &log)
     {
         GenshinCameraBridge bridge{};
+        if (config.cameraZoom)
+        {
+            bridge.inputZoomTick = ResolveSymbol(scanner, Patterns::InputZoomTick, ResolverKind::Direct, ValidateInputTick);
+            bridge.inputZoomAdjust = ResolveSymbol(scanner, Patterns::InputZoomAdjust, ResolverKind::Direct, ValidateInputAdjust);
+            bridge.updateManualLocateRatio = ResolveSymbol(scanner, Patterns::UpdateManualLocateRatio, ResolverKind::Direct, ValidateManualRatio);
+            bridge.scriptedManualLocateRatio = ResolveSymbol(scanner, Patterns::ScriptedManualLocateRatio, ResolverKind::Direct, ValidateScriptedRatio);
+            bridge.zoomDistanceLimit = ResolveSymbol(scanner, Patterns::ZoomDistanceLimit, ResolverKind::Direct, ValidateDistanceLimit);
+            bridge.zoomRadiusUpdate = ResolveSymbol(scanner, Patterns::ZoomRadiusUpdate, ResolverKind::Direct, ValidateRadiusUpdate);
+            bridge.zoomRadiusSmoothDamp = ResolveSymbol(scanner, Patterns::ZoomRadiusSmoothDamp, ResolverKind::Direct, ValidateRadiusSmoothDamp);
+            bridge.zoomCollectAvatarState = ResolveSymbol(scanner, Patterns::ZoomCollectAvatarState, ResolverKind::Direct, ValidateCollectAvatarState);
+            LogSymbol(log, "InputZoomTick", bridge.inputZoomTick, scanner);
+            LogSymbol(log, "InputZoomAdjust", bridge.inputZoomAdjust, scanner);
+            LogSymbol(log, "UpdateManualLocateRatio", bridge.updateManualLocateRatio, scanner);
+            LogSymbol(log, "ScriptedManualLocateRatio", bridge.scriptedManualLocateRatio, scanner);
+            LogSymbol(log, "ZoomDistanceLimit", bridge.zoomDistanceLimit, scanner);
+            LogSymbol(log, "ZoomRadiusUpdate", bridge.zoomRadiusUpdate, scanner);
+            LogSymbol(log, "ZoomRadiusSmoothDamp", bridge.zoomRadiusSmoothDamp, scanner);
+            LogSymbol(log, "ZoomCollectAvatarState", bridge.zoomCollectAvatarState, scanner);
+        }
         if (config.customFov)
         {
             bridge.setFov = ResolveSymbol(scanner, Patterns::ChangeFov, ResolverKind::Direct);

@@ -35,6 +35,21 @@ namespace SSMT::Tweaks
     }
     void HookManager::Create(std::uintptr_t target, void *detour, void **original)
     {
+        CreateDisabled(target, detour, original);
+        try
+        {
+            const auto status = MH_EnableHook(reinterpret_cast<void *>(target));
+            if (status != MH_OK)
+                throw std::runtime_error(std::string("HookManager: MH_EnableHook failed: ") + MH_StatusToString(status));
+        }
+        catch (...)
+        {
+            Remove(target);
+            throw;
+        }
+    }
+    void HookManager::CreateDisabled(std::uintptr_t target, void *detour, void **original)
+    {
         const MH_STATUS createStatus =
             MH_CreateHook(
                 reinterpret_cast<void *>(target),
@@ -46,15 +61,24 @@ namespace SSMT::Tweaks
             throw std::runtime_error(
                 std::string("HookManager: MH_CreateHook failed: ") + MH_StatusToString(createStatus));
         }
-
-        const MH_STATUS enableStatus =
-            MH_EnableHook(
-                reinterpret_cast<void *>(target));
-
-        if (enableStatus != MH_OK)
+    }
+    void HookManager::Enable(std::span<const std::uintptr_t> targets)
+    {
+        // 在同一次线程暂停中启用关联的限制点，避免逐个安装产生半启用状态。
+        for (const auto target : targets)
         {
-            throw std::runtime_error(
-                std::string("HookManager: MH_EnableHook failed: ") + MH_StatusToString(enableStatus));
+            const auto status = MH_QueueEnableHook(reinterpret_cast<void *>(target));
+            if (status != MH_OK)
+                throw std::runtime_error(std::string("HookManager: MH_QueueEnableHook failed: ") + MH_StatusToString(status));
         }
+        const auto status = MH_ApplyQueued();
+        if (status != MH_OK)
+            throw std::runtime_error(std::string("HookManager: MH_ApplyQueued failed: ") + MH_StatusToString(status));
+    }
+    void HookManager::Remove(std::uintptr_t target)
+    {
+        const auto status = MH_RemoveHook(reinterpret_cast<void *>(target));
+        if (status != MH_OK)
+            throw std::runtime_error(std::string("HookManager: MH_RemoveHook failed: ") + MH_StatusToString(status));
     }
 }

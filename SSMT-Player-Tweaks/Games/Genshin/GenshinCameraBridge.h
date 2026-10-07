@@ -15,6 +15,14 @@ namespace SSMT::Tweaks::Genshin
         ResolvedSymbol blenderTick;
         ResolvedSymbol playerPerspective;
         ResolvedSymbol eventCamera;
+        ResolvedSymbol inputZoomTick;
+        ResolvedSymbol inputZoomAdjust;
+        ResolvedSymbol updateManualLocateRatio;
+        ResolvedSymbol scriptedManualLocateRatio;
+        ResolvedSymbol zoomDistanceLimit;
+        ResolvedSymbol zoomRadiusUpdate;
+        ResolvedSymbol zoomRadiusSmoothDamp;
+        ResolvedSymbol zoomCollectAvatarState;
         ResolvedSymbol findString;
         ResolvedSymbol findGameObject;
         ResolvedSymbol getActive;

@@ -1,4 +1,5 @@
 #include "CameraTweaks.h"
+#include "CameraZoom.h"
 
 #include "Core/HookManager.h"
 #include "Games/Genshin/GenshinCameraBridge.h"
@@ -150,6 +151,9 @@ namespace SSMT::Tweaks::Genshin::CameraTweaks
     {
         cameraConfig = config;
         cameraBridge = ResolveCameraBridge(scanner, config, log);
+
+        if (config.cameraZoom)
+            InstallCameraZoomHooks(scanner, cameraBridge, log);
 
         if (config.customFov)
         {
