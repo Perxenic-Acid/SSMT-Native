@@ -51,7 +51,7 @@ struct Item {
     int childCount = -1, nativeChildCount = -1, nameLength = 0;
     wchar_t name[128]{};
     bool arrayValid = false, liveValid = false;
-    uintptr_t rootBone = 0, bonesArray = 0, sharedMesh = 0;
+    uintptr_t rootBone = 0, bonesArray = 0, sharedMesh = 0, meshClass = 0;
     uint64_t bonesLength = 0;
     int nativeBonesLength = -1, meshNameLength = 0;
     wchar_t meshName[128]{};
@@ -197,6 +197,7 @@ bool ExecuteGuarded() {
                     uintptr_t meshClass = 0, nativeMesh = 0;
                     if (!Read(item.sharedMesh, meshClass) || !Name(meshClass, "Mesh") || !Read(item.sharedMesh + 0x10, nativeMesh) || !nativeMesh ||
                         !Root(item, 6, item.sharedMesh) || !ReadName(item.sharedMesh, item.meshName, item.meshNameLength)) return false;
+                    item.meshClass=meshClass;
                 }
                 job.step = 13;
                 for (size_t i = 0; i < item.bonesLength; ++i) {
@@ -291,8 +292,11 @@ bool DispatchJob(HANDLE stop,HMODULE module,Window window,std::ostream& report,b
 }
 bool RunMotionSession(GenshinNativeRuntime& runtime,HANDLE stop,HMODULE module,Window window,std::ostream& report,const std::filesystem::path& directory) {
     if (!MotionRigArmed()) { report << "motion_session=NOT_ARMED; reason=Actor_or_rig_gate\n"; return false; }
-    bool passed=InstallAnimationReturnProbe(runtime,stop,report);
-    report << "phase=MOTION_COMMANDS_READY; F11=load_or_reload_and_play; F12=stop_and_restore; F7=finish_session\n";
+    // 初始化只读 reference；失败后仍走统一的恢复 / roots 清理，禁止退回当前动画基准。
+    bool passed=InitializeMotionReference(runtime,job.items[1].meshClass,job.mesh,report);
+    if (passed) {job.mode=9;passed=DispatchJob(stop,module,window,report,true);ReportMotion(report);}
+    if (passed) passed=InstallAnimationReturnProbe(runtime,stop,report);
+    report << "phase=" << (passed?"MOTION_COMMANDS_READY":"MOTION_REFERENCE_BLOCKED") << "; NUMPAD1=load_or_reload_and_play; NUMPAD2=stop_and_restore; NUMPAD3=finish_session; NumLock=ON; playback_control=MANUAL\n";
     report << "motion_path_file=motion_path.txt; command_flags=motion_play.flag,motion_stop.flag,motion_exit.flag\n"; report.flush();
     auto consume=[&](const wchar_t* name) {
         const auto path=directory/name;
@@ -304,7 +308,7 @@ bool RunMotionSession(GenshinNativeRuntime& runtime,HANDLE stop,HMODULE module,W
         while (passed && WaitForSingleObject(stop,25)!=WAIT_OBJECT_0) {
             DWORD foreground=0; GetWindowThreadProcessId(GetForegroundWindow(),&foreground);
             const auto inGame=foreground==GetCurrentProcessId();
-            const bool play=inGame&&(GetAsyncKeyState(VK_F11)&0x8000),stopKey=inGame&&(GetAsyncKeyState(VK_F12)&0x8000),finish=inGame&&(GetAsyncKeyState(VK_F7)&0x8000);
+            const bool play=inGame&&(GetAsyncKeyState(VK_NUMPAD1)&0x8000),stopKey=inGame&&(GetAsyncKeyState(VK_NUMPAD2)&0x8000),finish=inGame&&(GetAsyncKeyState(VK_NUMPAD3)&0x8000);
             const bool playCommand=(play&&!previousPlay)||consume(L"motion_play.flag"),stopCommand=(stopKey&&!previousStop)||consume(L"motion_stop.flag"),exitCommand=(finish&&!previousExit)||consume(L"motion_exit.flag");
             previousPlay=play; previousStop=stopKey; previousExit=finish;
             if (exitCommand) break;
@@ -343,14 +347,14 @@ bool RunMotionSession(GenshinNativeRuntime& runtime,HANDLE stop,HMODULE module,W
 bool RunBoneExperiment(GenshinNativeRuntime& runtime,HANDLE stop,HMODULE module,Window window,std::ostream& report,const std::filesystem::path& directory) {
     if (!BoneWriteArmed()) { report << "write_result=NOT_ARMED; reason=target_or_rig_gate\n"; return true; }
     const auto arm=IsArmExperiment();
-    report << "phase=" << (arm?"WAITING_ARM_WRITE; trigger=foreground_F10_or_write_ready.flag":"WAITING_HEAD_WRITE; trigger=foreground_F9_or_write_ready.flag") << '\n';
+    report << "phase=" << (arm?"WAITING_ARM_WRITE; trigger=foreground_NUMPAD5_or_write_ready.flag":"WAITING_HEAD_WRITE; trigger=foreground_NUMPAD4_or_write_ready.flag") << '\n';
     ReportBoneWrite(report); report.flush();
     const auto marker=directory/L"write_ready.flag";
     const auto deadline=GetTickCount64()+5*60*1000;
     bool trigger=false;
     while (GetTickCount64()<deadline && WaitForSingleObject(stop,100)!=WAIT_OBJECT_0) {
         DWORD foreground=0; GetWindowThreadProcessId(GetForegroundWindow(),&foreground);
-        if ((foreground==GetCurrentProcessId() && (GetAsyncKeyState(arm?VK_F10:VK_F9)&0x8000)) || GetFileAttributesW(marker.c_str())!=INVALID_FILE_ATTRIBUTES) { trigger=true; break; }
+        if ((foreground==GetCurrentProcessId() && (GetAsyncKeyState(arm?VK_NUMPAD5:VK_NUMPAD4)&0x8000)) || GetFileAttributesW(marker.c_str())!=INVALID_FILE_ATTRIBUTES) { trigger=true; break; }
     }
     bool passed=true;
     if (trigger) {
@@ -513,19 +517,29 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
     if (!dispatchMessage || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
         reinterpret_cast<LPCWSTR>(&Dispatch), &module)) return false;
     const auto marker = directory / L"scene_ready.flag";
-    report << "phase=WAITING_PLAYABLE_SCENE; trigger=foreground_F8_or_scene_ready.flag\n";
+    const bool autoScene=GetFileAttributesW((directory/L"auto_scene.flag").c_str())!=INVALID_FILE_ATTRIBUTES &&
+        GetFileAttributesW((directory/L"motion_mode.flag").c_str())!=INVALID_FILE_ATTRIBUTES &&
+        GetFileAttributesW((directory/L"target_actor_name.txt").c_str())!=INVALID_FILE_ATTRIBUTES;
+    report << (autoScene?"phase=AUTO_SCENE_DISCOVERY; gate=unique_active_configured_Actor_rig\n":"phase=WAITING_PLAYABLE_SCENE; trigger=foreground_NUMPAD0_or_scene_ready.flag; NumLock=ON\n");
     report.flush();
     const auto sceneDeadline = GetTickCount64() + 15 * 60 * 1000;
-    bool confirmed = false;
-    while (GetTickCount64() < sceneDeadline && WaitForSingleObject(stop, 250) != WAIT_OBJECT_0) {
+    bool confirmed = autoScene;
+    while (!confirmed && GetTickCount64() < sceneDeadline && WaitForSingleObject(stop, 25) != WAIT_OBJECT_0) {
         DWORD foreground = 0;
         GetWindowThreadProcessId(GetForegroundWindow(), &foreground);
         if (GetFileAttributesW(marker.c_str()) != INVALID_FILE_ATTRIBUTES ||
-            (foreground == GetCurrentProcessId() && (GetAsyncKeyState(VK_F8) & 0x8000))) { confirmed = true; break; }
+            (foreground == GetCurrentProcessId() && (GetAsyncKeyState(VK_NUMPAD0) & 0x8000))) { confirmed = true; break; }
     }
     if (!confirmed) { report << "blocker=scene entry not confirmed or cancelled\n"; return false; }
     if (GetFileAttributesW((directory/L"motion_mode.flag").c_str())!=INVALID_FILE_ATTRIBUTES) {
         ConfigureMotionMode(); report << "write_experiment=DYNAMIC_VMD_FK_USER_REQUESTED\n";
+        if (!InitializeBoneGeometry(runtime,report)) {report << "blocker=reference pose requires verified world rotation getters\n";return false;}
+    }
+    const auto ikScalePath=directory/L"foot_ik_scale.txt";
+    if (GetFileAttributesW(ikScalePath.c_str())!=INVALID_FILE_ATTRIBUTES) {
+        float units=0;std::ifstream scaleFile(ikScalePath);scaleFile>>units;
+        if (!ConfigureFootIK(units)) {report << "blocker=foot IK scale\n";return false;}
+        report << "foot_IK=ARMED_PREVIEW; units=" << units << "; root_position_writes=NONE\n";
     }
     if (GetFileAttributesW((directory/L"arm_test.flag").c_str())!=INVALID_FILE_ATTRIBUTES) {
         ConfigureArmExperiment(); report << "write_experiment=LEFT_UPPERARM_60_DEGREES_TWO_CYCLES_USER_REQUESTED\n";
@@ -539,7 +553,7 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
         if (size && MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,targetName.data(),int(targetName.size()),actorName.data(),size)) SetRigWriteTarget(actorName);
         report << "requested_actor_name=" << targetName << '\n';
     }
-    report << "scene_entry=USER_CONFIRMED; character_writes=NONE\n";
+    report << (autoScene?"scene_entry=AUTOMATIC_READONLY_DISCOVERY; character_writes=NONE\n":"scene_entry=USER_CONFIRMED; character_writes=NONE\n");
     for (unsigned attempt = 0; attempt < 120; ++attempt) {
         report << "\n[scene snapshot " << attempt + 1 << "] tick=" << GetTickCount64() << '\n';
         // 清空上次历史观测，只保留已经核验的 native class/descriptor 身份。
@@ -608,7 +622,20 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
                     }
                 }
                 report.flush();
-                if (!job.complete || job.fault || state.load() != 3) { ExportRigProbe(directory, report); return false; }
+                if (!job.complete || job.fault || state.load() != 3) {
+                    ExportRigProbe(directory, report);
+                    if (autoScene && !job.fault && state.load()==3 && !BoneWriteArmed() && !MotionRigArmed()) {
+                        report << "auto_scene=WAITING_TARGET; partial_readonly_snapshot_released=1\n";report.flush();
+                        if (WaitForSingleObject(stop,5000)==WAIT_OBJECT_0) return false;
+                        continue;
+                    }
+                    return false;
+                }
+                if (autoScene && !MotionRigArmed()) {
+                    report << "auto_scene=WAITING_UNIQUE_ACTIVE_TARGET_RIG; writes=NONE\n";report.flush();
+                    if (WaitForSingleObject(stop,5000)==WAIT_OBJECT_0) return false;
+                    continue;
+                }
                 if (success) {
                     const auto& item = job.items[1];
                     if (item.liveValid && item.bonesValid) {

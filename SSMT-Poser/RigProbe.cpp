@@ -355,6 +355,7 @@ bool CaptureRig(uintptr_t renderer, uintptr_t transform, uintptr_t bones, uint64
                 for (int i=0;i<snapshot.selectedNodeCount;++i) {
                     const auto& node=snapshot.nodes[i]; auto& bone=motionBones[i]; bone={};
                     bone.object=node.transform; bone.native=node.native; bone.parent=node.parent;
+                    bone.skinIndex=node.skinIndex;
                     bone.parentNative=node.parent>=0?snapshot.nodes[node.parent].native:0;
                     bone.owned=Distance(i,animator.node)>=0;
                     std::wmemcpy(bone.name,node.name,std::size(bone.name));

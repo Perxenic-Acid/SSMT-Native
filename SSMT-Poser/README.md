@@ -6,7 +6,8 @@ Transform 实例，读取 GameObject.name，并交叉验证 childCount getter。
 后续场景采集已取得真实 SMR/Animator、骨名和 parent 层级。本轮增加 Actor ancestry
 匹配，以及默认不触发的单骨旋转研究；ScriptRunBehaviourLateUpdate 返回后的两轮
 左上臂变化 / 恢复已有用户视觉确认，历史 Head 4°视觉结果仍未确认。
-动态 VMD FK 加载 / 播放 / 停止代码已通过本地验证，动作实机验证暂未完成。
+动态 VMD FK 加载 / 播放 / 停止代码已通过本地验证，实机反馈指出足 IK 缺失。
+新增自动只读采集和两骨足 IK 预览，仍需实机校准，不宣称完整 MMD retarget。
 
 插件只通过现有 PluginHost ABI v2 工作，不依赖 Player Tweaks，不修改 3DMigoto，
 没有前端页面或渲染回调。只有插件已安装且为 GIMI 启用时进入现有启动计划。
@@ -89,7 +90,7 @@ SEH 边界记录错误并停止；临时 hook 卸载后等待在途 callback 结
 ## 场景组件与骨名采集
 
 当前探针在 metadata/新 getter 校验完成后等待用户进入可控角色场景。
-进入后在游戏前台按 F8 开始只读采集，也可由测试助手在本次 diagnostics 目录写入
+开启 NumLock，进入后在游戏前台按小键盘 0 开始只读采集，也可由测试助手在本次 diagnostics 目录写入
 `scene_ready.flag`。场景确认最多等待 15 分钟，取消/游戏退出会停止 worker。
 确认后每 5 秒重试 Animator/SkinnedMeshRenderer 枚举，最多 120 次，每次临时安装并移除
 消息 hook；只读快照不跨 callback 持有 managed 引用。
@@ -103,7 +104,7 @@ SMR bones 数组受强 GC handle 保护，数量必须与已核验 native 容器
 最多完整读取 512 个 slot，保持 null slot 的索引，验证非空项的 class/native 指针，
 通过只读 Object.get_name 复制骨名。worker 将快照导出到同目录的
 `genshin_poser_bones.txt`，含骨名、managed Transform、runtime class 和 native Transform 地址。
-F8 快照不调用 setter，不冻结角色或禁用动画。
+小键盘 0 快照不调用 setter，不冻结角色或禁用动画。
 
 ## Rig、Actor 与单骨实验
 
@@ -122,7 +123,7 @@ renderer 按根与 Head 分组到 Actor，导出 `genshin_poser_actors.txt`。
 `BoneWriteProbe` 默认不武装。测试助手需先把已由只读快照识别的完整 Actor 内部名
 写入本次诊断目录 `target_actor_name.txt`；场景快照必须满足核心骨链、Head→Neck、
 Body/Head 共用 Animator、活动状态、唯一活动 AvatarRoot/EntityRoot 分支及目标名匹配。
-它保留 Head、Actor 根、SMR、Animator 的 4 个强 GC handle，等前台 F9 或
+它保留 Head、Actor 根、SMR、Animator 的 4 个强 GC handle，等前台小键盘 4 或
 `write_ready.flag`；等待最多 5 分钟，取消/超时会在主线程释放 target roots。
 
 首次调用已按当前样本反汇编恢复 Quaternion ABI：getter 使用 RCX=sret、RDX=this；
@@ -137,7 +138,7 @@ identity 不一致时终止，不能向未经核验或已销毁的对象恢复�
 日志区分读写回读与恢复成功、下一 callback 的覆盖情况和用户实际画面观察。
 2026-10-08 用户要求更清晰的视觉对照后，新增可选 `arm_test.flag` 实验：
 仍只写一根 `Bip001 L UpperArm`，核验其 parent 为 `Bip001 L Clavicle` 且属于同一 Actor。
-F10 触发围绕父坐标系 Z 轴 60 度的两次短时写入；每次独立保存 q0、固定 q1 重写
+小键盘 5 触发围绕父坐标系 Z 轴 60 度的两次短时写入；每次独立保存 q0、固定 q1 重写
 30 次、间隔 50 ms，随后恢复。第一次恢复后保留 target roots，等待 1 秒再进行第二次；
 最终恢复后全部释放。没有该 flag 时保持原 Head 实验；没有目标名时两种写入都不武装。
 日志区分 setter/native 回读、每次恢复与视觉观察，不能把自然动画当作画面写入成功。
@@ -145,17 +146,47 @@ F10 触发围绕父坐标系 Z 轴 60 度的两次短时写入；每次独立保
 
 ## 动态 VMD 旋转预览
 
-用户要求动态动作后新增独立的 `motion_mode.flag` 模式。F8 确认场景并绑定唯一活动
-AvatarRoot 下配置的 Actor；F11 从 diagnostics 目录的 UTF-8 `motion_path.txt` 读取路径，
-加载 / 重载 VMD 并从头播放；F12 停止并恢复播放前的旋转；F7 结束会话并释放 hook / GC roots。
-路径支持中文与空格，修改路径后无需重启游戏或重新加载 DLL。测试自动化可使用同目录
+用户要求动态动作后新增独立的 `motion_mode.flag` 模式。开启 NumLock，小键盘 0 确认
+场景并绑定唯一活动 AvatarRoot 下配置的 Actor；小键盘 1 从 diagnostics 目录的 UTF-8
+`motion_path.txt` 读取路径并加载 / 重载 VMD 从头播放；小键盘 2 停止并恢复播放前的旋转；
+小键盘 3 结束会话并释放 hook / GC roots。主键盘数字和 F 功能键不触发探针命令。
+路径支持中文与空格，修改路径后无需重启游戏或重新加载 DLL。用户手动控制播放和停止；
+自动化仅负责只读场景 / rig 准备，不由 agent 自动创建播放、停止标记。独立测试工具可使用同目录
 `motion_play.flag`、`motion_stop.flag`、`motion_exit.flag`；这些标记只在已武装的动作会话消费。
+存在 `auto_scene.flag` 且配置了动作模式和目标 Actor 名时，启动后自动执行只读 discovery，
+最多每 5 秒重试、120 次。只有唯一活动 AvatarRoot 下的目标 rig 通过校验才武装，
+不再要求采集按键或向 agent 回复场景确认；SEH / 在途派发失败仍停止，不能无限重试。
+自动采集本身不启动 setter；手动小键盘 0 路径仍保留。
 
 VMD 0002 解析检查文件边界、计数、帧号、有限数与有效 Quaternion；CP932 骨名转换为
 Unicode，排序 / 去重后按 30 FPS 采样贝塞尔时间曲线和 Quaternion Slerp。
 相机 / 表情文件可解析，但没有骨骼轨道时拒绝开始角色播放。
-采用标准 MMD 主体 / 手指 FK 层级及 frame 0 相对旋转校准；这是动作预览，
-尚未实现 PMX bind pose / 附加轴转换、足部 IK、root 位移、表情、物理或相机播放。
+采用标准 MMD 主体 / 手指 FK 层级与目标 Mesh 的静态 bind reference；这是动作预览，
+默认 FK 不求解足 IK；尚未实现完整 PMX bind pose / 附加轴转换、root 位移、表情、物理或相机播放。
+
+播放前只读捕获 `Mesh.bindposes`，核验 descriptor、wrapper / native consumer 的 Matrix4x4
+SZARRAY 返回与 64 字节复制布局，并与 native bind 数据逐项比较。只接受有限、可逆、
+无 shear、正 scale 的矩阵；skin 索引必须完整匹配，Body 模型空间必须与所选 Actor 对齐。
+矩阵按值保存，临时 Mesh / 数组 GC roots 即时释放，失败时拒绝播放，禁止回退到当前待机动作。
+旋转基准与恢复快照分开：VMD 绝对采样作用于静态绑定旋转，现场旋转只用于停止恢复。
+没有 VMD 轨道的蒙皮骨也覆盖绑定旋转并跟随已控制父骨；未蒙皮桥接骨的真实父旋转用于
+计算 localRotation，以抵消其动画旋转。仍未覆盖骨骼 localPosition / scale 或禁用全部姿态系统，
+因此不能声称已完全屏蔽游戏动画、物理和叠加效果。完整 A-pose 隔离与 PMX 轴校准继续待办。
+模型的 bind pose 是否为 A-pose 必须从实际数据核验，不能由名称或单位 Quaternion 假定。
+
+诊断目录 `foot_ik_scale.txt` 可显式配置正数、最大为 1 的“游戏单位 / VMD 位移单位”，
+武装当前实验两骨 IK：按各轴贝塞尔曲线采样左右足 IK 位置，以静态 bind 脚位置为锚点，
+实读目标 Thigh→Calf→Foot 的世界坐标和长度，解析求解膝 / 脚目标，写入大腿、
+小腿、脚的 localRotation 并逐次回读。腿长度比例从实际腿长与静态绑定骨长对照；
+膝盖方向采用静态绑定弯曲面；退化时
+采用 Actor 局部 +Z。超出骨长范围的目标投影到可达范围，不拉伸骨骼。
+验证实际脚坐标与投影目标的残差及腿长稳定性，失效即停止并恢复。
+新位置 / 世界旋转 getter 均经当前样本 wrapper / native consumer ABI 校验，局部位置
+与原生 TRS 字段对照，输出缓冲区带 canary。没有位置 setter 或 Actor root 位移写入。
+
+该 IK 是带显式位移比例的预览：VMD 不包含源 PMX 骨长和 rest pose；没有完整
+PMX grant / 足 D 骨修正、IK 开关轨道、脚趾 IK 或 root / center 位移，不能宣称还原源舞蹈。
+报告分开记录 FK / IK quaternion 写入、两腿长度、求解次数、不可达目标数和最大脚位置残差。
 
 写入在已核验的 ScriptRunBehaviourLateUpdate 返回后执行，目标与桥接父骨持有强 root，
 每帧检查对象 / native / parent 身份并回读 localRotation；只写选定 Actor 的旋转。
