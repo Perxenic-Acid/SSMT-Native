@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "ssmt.poser.genshin-probe",
+  "name": "SSMT Poser：原神 Rig 与 VMD 动作实验",
+  "version": "0.1.0",
+  "author": "SSMT",
+  "compatibility": {
+    "ssmt": ">=4.0.0",
+    "platforms": ["windows-x64"],
+    "games": ["GIMI"]
+  },
+  "contributions": {
+    "runtimePlugins": [{"path": "native/SSMT-Poser.dll"}]
+  },
+  "permissions": ["native.inject", "process.observe", "filesystem.read", "filesystem.write"]
+}

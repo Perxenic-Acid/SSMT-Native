@@ -15,6 +15,10 @@ endif()
 add_subdirectory(3Dmigoto-Injector-V2)
 add_subdirectory(MessageBoxTestDll)
 add_subdirectory(SSMT-Player-Tweaks)
+option(SSMT_BUILD_POSER_PROBE "构建可选的原神运行时探针" OFF)
+if(SSMT_BUILD_POSER_PROBE)
+    add_subdirectory(SSMT-Poser)
+endif()
 
 set(SSMT_DIST_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/dist/$<CONFIG>"

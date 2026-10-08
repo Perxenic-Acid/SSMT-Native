@@ -12,6 +12,15 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: 验证原神 Poser 实验插件
+        shell: pwsh
+        run: |
+          cmake -S SSMT-Poser -B build-poser -A x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build-poser --config Release --target SSMT-Poser PoserProbeTests --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir build-poser -C Release --output-on-failure
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: 打包官方插件和目录
         shell: pwsh
         env:
