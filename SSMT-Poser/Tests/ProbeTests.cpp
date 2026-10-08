@@ -13,6 +13,8 @@
 #include "VmdMotion.h"
 #include "MotionPlayback.h"
 #include <fstream>
+#include "LegIK.h"
+#include "ReferencePose.h"
 
 using namespace poser;
 namespace {
@@ -108,6 +110,9 @@ void VmdTests() {
     Require(clip.boneKeys==3 && clip.tracks.size()==1 && clip.tracks[0].keys.size()==2 && clip.lastFrame==30,"VMD sort/dedup failed");
     Require(vmd::FindTrack(clip,L"右腕")==0 && vmd::FindTrack(clip,L"右足")==-1,"Shift-JIS track decoding failed");
     const auto middle=vmd::Sample(clip.tracks[0],15);
+    clip.tracks[0].keys.front().position={0,0,0};clip.tracks[0].keys.back().position={2,4,6};
+    const auto position=vmd::SamplePosition(clip.tracks[0],15);
+    Require(std::fabs(position.x-1)<0.0001f&&std::fabs(position.y-2)<0.0001f&&std::fabs(position.z-3)<0.0001f,"VMD IK position curves incorrect");
     Require(bone_detail::Valid(middle) && std::fabs(2*std::acos(middle.w)*180/3.141592653589793-30)<0.01,"VMD rotation block or Slerp incorrect");
     Require(bone_detail::Same(vmd::Sample(clip.tracks[0],-1),Quaternion{0,0,0,1}),"duplicate final frame not selected");
     Require(bone_detail::Same(vmd::Sample(clip.tracks[0],100),clip.tracks[0].keys.back().rotation),"end frame not held");
@@ -130,6 +135,33 @@ void VmdTests() {
     const auto cancelled=CreateEventW(nullptr,TRUE,TRUE,nullptr);
     Require(cancelled && !vmd::Parse(bytes,clip,error,cancelled) && error=="VMD_CANCELLED","VMD parser ignored cancellation");
     CloseHandle(cancelled);
+}
+void LegIKTests() {
+    ik::Solution out;
+    Require(ik::Solve({0,0,0},{0,-1,0},{0,0,1},1,1,out),"reachable leg IK rejected");
+    Require(ik::Length(ik::Sub(out.ankle,{0,-1,0}))<0.0001f &&
+        std::fabs(ik::Length(out.knee)-1)<0.0001f && std::fabs(ik::Length(ik::Sub(out.ankle,out.knee))-1)<0.0001f && out.knee.z>0,"IK failed endpoint, lengths or knee pole");
+    Require(ik::Solve({0,0,0},{0,-4,0},{0,-1,0},1,1,out)&&out.clamped&&ik::Length(out.ankle)<2,"unreachable goal not clamped");
+    Require(ik::Solve({0,0,0},{0,-0.2f,0},{0,0,1},1,0.4f,out)&&out.clamped&&ik::Finite(out.knee),"too-close unequal limb goal invalid");
+    Require(!ik::Solve({},{},{0,0,1},1,1,out)&&!ik::Solve({},{0,-1,0},{0,0,1},0,1,out),"degenerate IK accepted");
+    const auto flip=ik::FromTo({1,0,0},{-1,0,0});
+    Require(bone_detail::Valid(flip)&&ik::Length(ik::Sub(ik::Rotate(flip,{1,0,0}),{-1,0,0}))<0.0001f,"antipodal aiming rotation invalid");
+    const auto small=ik::Unit({1,0.0005f,0});
+    Require(ik::Length(ik::Sub(ik::Rotate(ik::FromTo({1,0,0},small),{1,0,0}),small))<0.000001f,"small IK correction discarded by rounded dot");
+    const auto almostOpposite=ik::Unit({-1,0.0005f,0});
+    Require(ik::Length(ik::Sub(ik::Rotate(ik::FromTo({1,0,0},almostOpposite),{1,0,0}),almostOpposite))<0.000001f,"near antipodal correction lost");
+}
+void ReferencePoseTests() {
+    reference::Matrix matrix{{1,0,0,0,0,1,0,0,0,0,1,0,-1,-2,-3,1}};
+    reference::Pose pose;
+    Require(reference::Decode(matrix,pose)&&bone_detail::Same(pose.rotation,{0,0,0,1})&&ik::Length(ik::Sub(pose.position,{1,2,3}))<0.00001f,"bind translation inverse failed");
+    // 正 scale 与 90 度旋转共同存在时，位置必须经过逆线性部分，不能只取负平移。
+    matrix={{0,2,0,0,-2,0,0,0,0,0,2,0,4,-2,-6,1}};
+    Require(reference::Decode(matrix,pose)&&ik::Length(ik::Sub(pose.position,{1,2,3}))<0.00001f&&
+        ik::Length(ik::Sub(ik::Rotate(pose.rotation,{1,0,0}),{0,-1,0}))<0.00001f,"scaled rotated bind inversion failed");
+    matrix.value[0]=0.5f;Require(!reference::Decode(matrix,pose),"sheared bind matrix accepted");
+    matrix={{-1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1}};Require(!reference::Decode(matrix,pose),"mirrored bind matrix accepted");
+    matrix.value[0]=0;Require(!reference::Decode(matrix,pose),"singular bind matrix accepted");
 }
 uintptr_t motionRootTable[32]{};
 unsigned motionRootNext=1,motionRootNew=0,motionRootFree=0;
@@ -170,7 +202,7 @@ void MotionRigGuards() {
     const auto bytes=MotionFixture();
     { std::ofstream file(path,std::ios::binary);file.write(reinterpret_cast<const char*>(bytes.data()),std::streamsize(bytes.size())); }
     std::ostringstream report;
-    Require(LoadMotionClip(path,report) && report.str().find("mapped_tracks=1 write_bones=1")!=std::string::npos,"owned FK track map failed");
+    Require(!LoadMotionClip(path,report) && report.str().find("STATIC_BIND_REFERENCE_REQUIRED")!=std::string::npos,"motion fell back to live pose without static reference");
     // 未初始化真实 Quaternion callee 的假 runtime 必须拒绝开始；仅做文件与身份准备不能写游戏。
     Require(!MotionMainStep(7) && MotionStatus()==0,"motion started with unverified Quaternion backend");
     Require(MotionMainStep(6) && motionRootNew==motionRootFree && !MotionRigArmed(),"motion rig roots leaked on no-write teardown");
@@ -417,8 +449,14 @@ void AbiTests(const wchar_t* path) {
 int wmain(int argc, wchar_t** argv) {
     try {
         Require(argc >= 2, "usage: PoserProbeTests <SSMT-Poser.dll> [VMD samples...]");
-        MetadataTests(); ResolverTests(); NativeResolverGuards(); LiveObjectGuards(); BoneMathTests(); AnimationHookAbiTests(); VmdTests(); MotionRigGuards(); AbiTests(argv[1]);
+        MetadataTests(); ResolverTests(); NativeResolverGuards(); LiveObjectGuards(); BoneMathTests(); AnimationHookAbiTests(); VmdTests(); LegIKTests(); ReferencePoseTests(); MotionRigGuards(); AbiTests(argv[1]);
         for (int index=2;index<argc;++index) {
+            if (std::filesystem::path(argv[index]).extension()==L".bindposes") {
+                std::ifstream input(argv[index],std::ios::binary);Require(bool(input),"bind fixture unavailable");
+                reference::Matrix matrix;unsigned count=0;
+                while (input.read(reinterpret_cast<char*>(&matrix),sizeof(matrix))) {reference::Pose pose;Require(reference::Decode(matrix,pose),"real bind fixture invalid");++count;}
+                Require(input.eof()&&input.gcount()==0&&count>0,"truncated bind fixture accepted");std::cout << "Bind reference matrices=" << count << '\n';continue;
+            }
             vmd::Clip clip; std::string error;
             Require(vmd::Load(argv[index],clip,error),error.c_str());
             std::cout << "VMD keys=" << clip.boneKeys << " tracks=" << clip.tracks.size() << " camera=" << clip.cameraKeys << " last=" << clip.lastFrame << '\n';

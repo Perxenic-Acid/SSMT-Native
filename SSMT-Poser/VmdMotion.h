@@ -28,4 +28,5 @@ Quaternion Inverse(const Quaternion& q);
 Quaternion Slerp(Quaternion a,Quaternion b,float t);
 float Bezier(const std::array<uint8_t,64>& interpolation,unsigned channel,float fraction);
 Quaternion Sample(const Track& track,double frame);
+Vector3 SamplePosition(const Track& track,double frame);
 }

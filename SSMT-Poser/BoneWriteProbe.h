@@ -3,6 +3,7 @@
 
 namespace poser {
 struct Quaternion { float x, y, z, w; };
+struct Vector3 { float x=0,y=0,z=0; };
 namespace bone_detail {
 bool Valid(const Quaternion& value);
 Quaternion DeltaYaw(const Quaternion& original);
@@ -28,4 +29,7 @@ void ReportAnimationReturnProbe(std::ostream& report);
 // 调用方必须在已核验主线程持有强 root；共用已经验证的 Quaternion callee。
 bool ReadBoneRotation(uintptr_t object,uintptr_t expectedNative,Quaternion& out);
 bool WriteBoneRotation(uintptr_t object,const Quaternion& value);
+bool InitializeBoneGeometry(GenshinNativeRuntime& runtime,std::ostream& report);
+bool ReadBonePosition(uintptr_t object,uintptr_t expectedNative,Vector3& out,bool world);
+bool ReadBoneWorldRotation(uintptr_t object,uintptr_t expectedNative,Quaternion& out);
 }

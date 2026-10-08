@@ -40,6 +40,8 @@ Quaternion DeltaArm(const Quaternion& q) {
 namespace {
 RigCalls calls;
 NativeMethod getter, setter;
+NativeMethod localPositionGetter,worldPositionGetter,worldRotationGetter;
+bool geometryReady=false;
 uintptr_t parentEntry = 0, parentDescriptor = 0, activeEntry = 0, activeDescriptor = 0;
 struct Sample { unsigned mode; DWORD thread; uint64_t tick; Quaternion before, after; bool matched; };
 struct Test {
@@ -248,6 +250,53 @@ bool ReadBoneRotation(uintptr_t object,uintptr_t expectedNative,Quaternion& out)
 }
 bool WriteBoneRotation(uintptr_t object,const Quaternion& value) {
     return test.ready && bone_detail::Valid(value) && SetFor(object,value);
+}
+bool InitializeBoneGeometry(GenshinNativeRuntime& runtime,std::ostream& report) {
+    geometryReady=false;
+    if (!Method(runtime,"Transform","get_localPosition",0,localPositionGetter) ||
+        !Method(runtime,"Transform","get_position",0,worldPositionGetter) ||
+        !Method(runtime,"Transform","get_rotation",0,worldRotationGetter)) return false;
+    for (const auto& method : {localPositionGetter,worldPositionGetter}) {
+        const auto internal=Relative(method.entry+28);
+        if (!Pattern(method.entry,42,"48 89 CE C7 41 08 00 00 00 00 48 C7 01 00 00 00 00 48 89 D1 48 89 F2 E8 ?? ?? ?? ?? 48 89 F0") ||
+            !Pattern(internal,80,"F2 0F 10 00 F2 0F 11 07 8B 40 08 89 47 08")) {report << "geometry_blocker=Vector3_wrapper_or_internal; method=" << method.name << '\n';return false;}
+        const auto consumer=Relative(internal+39);
+        if (!consumer || !(method.metadataId==localPositionGetter.metadataId?
+            Pattern(consumer,49,"42 0F 10 14 C1"):
+            Pattern(consumer,70,"F3 0F 11 03 66 0F 70 08 55 F3 0F 11 4B 04"))) {report << "geometry_blocker=Vector3_native_consumer; method=" << method.name << '\n';return false;}
+        report << "[VECTOR_ABI] " << method.name << " id=" << method.metadataId << " entry=0x" << std::hex << method.entry
+            << " internal=0x" << internal << " consumer=0x" << consumer << std::dec << " RCX=sret RDX=this R8=descriptor; bytes=12\n";
+    }
+    const auto internalRotation=Relative(worldRotationGetter.entry+20);
+    if (!Pattern(worldRotationGetter.entry,34,"48 89 CE 0F 57 C0 0F 11 01 48 89 D1 48 89 F2 E8 ?? ?? ?? ?? 48 89 F0") ||
+        !Pattern(internalRotation,61,"0F 10 00 0F 11 07") ||
+        !Pattern(Relative(internalRotation+39),47,"0F 28 00 48 8B C3 0F 11 03")) {report << "geometry_blocker=world_rotation_consumers\n";return false;}
+    report << "[WORLD_ROTATION_ABI] entry=0x" << std::hex << worldRotationGetter.entry << " internal=0x" << internalRotation
+        << std::dec << " RCX=sret RDX=this R8=descriptor; bytes=16\n";
+    geometryReady=true; return true;
+}
+bool ReadBonePosition(uintptr_t object,uintptr_t expectedNative,Vector3& out,bool world) {
+    if (!geometryReady || !Alive(object,calls.transformClass,expectedNative)) return false;
+    const auto& method=world?worldPositionGetter:localPositionGetter;
+    constexpr uint32_t Canary=0x92FA372B;
+    struct Buffer { uint32_t first; Vector3 value; uint32_t last; } buffer{Canary,{},Canary};
+    const auto returned=reinterpret_cast<Vector3* (*)(Vector3*,uintptr_t,uintptr_t)>(method.entry)(&buffer.value,object,method.descriptor);
+    if (returned!=&buffer.value || buffer.first!=Canary || buffer.last!=Canary ||
+        !std::isfinite(buffer.value.x) || !std::isfinite(buffer.value.y) || !std::isfinite(buffer.value.z)) return false;
+    if (!world) {
+        uintptr_t data=0,entries=0; uint32_t index=0; Vector3 native{};
+        if (!Read(expectedNative+0x48,data) || !Read(expectedNative+0x50,index) || index>1000000 || !Read(data+8,entries) ||
+            !Read(entries+size_t(index)*0x30,native) || std::memcmp(&native,&buffer.value,sizeof(native))) return false;
+    }
+    out=buffer.value; return true;
+}
+bool ReadBoneWorldRotation(uintptr_t object,uintptr_t expectedNative,Quaternion& out) {
+    if (!geometryReady || !Alive(object,calls.transformClass,expectedNative)) return false;
+    constexpr uint64_t Canary=0xFA77130834512A82;
+    struct Buffer { uint64_t first; Quaternion value; uint64_t last; } buffer{Canary,{},Canary};
+    const auto returned=reinterpret_cast<Quaternion* (*)(Quaternion*,uintptr_t,uintptr_t)>(worldRotationGetter.entry)(&buffer.value,object,worldRotationGetter.descriptor);
+    if (returned!=&buffer.value || buffer.first!=Canary || buffer.last!=Canary || !bone_detail::Valid(buffer.value)) return false;
+    out=buffer.value; return true;
 }
 bool BoneWriteApplied() { return test.applied; }
 void ConfigureArmExperiment() { test.arm=true; }

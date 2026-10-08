@@ -6,17 +6,20 @@ namespace poser {
 struct MotionRigBone {
     uintptr_t object=0,native=0,parentNative=0;
     int parent=-1;
+    int skinIndex=-1;
     bool owned=false;
     wchar_t name[128]{};
 };
 void ConfigureMotionMode();
+bool ConfigureFootIK(float gameUnitsPerVmdUnit);
 bool IsMotionMode();
 bool ArmMotionRig(const RigCalls& calls,uintptr_t root,uintptr_t renderer,uintptr_t animator,
     std::span<const MotionRigBone> bones,uintptr_t activeEntry,uintptr_t activeDescriptor);
 bool MotionRigArmed();
+bool InitializeMotionReference(GenshinNativeRuntime& runtime,uintptr_t meshClass,const NativeMethod& sharedMesh,std::ostream& report);
 // worker 操作，调用前必须完成主线程停止/恢复派发；下一次开始派发发布给主线程。
 bool LoadMotionClip(const std::filesystem::path& path,std::ostream& report,HANDLE stop=nullptr);
-// 6=恢复并释放 rig roots，7=开始，8=停止并恢复，保留 rig 供动态重载。
+// 6=恢复并释放 rig roots，7=开始，8=停止并恢复，9=只读捕获静态绑定姿态。
 bool MotionMainStep(unsigned mode);
 void DisableMotionWrites();
 void MotionLateTick(); // SEH leaf，限定已核验 Unity 主线程。

@@ -85,6 +85,19 @@ int FindTrack(const Clip& clip,std::wstring_view name) {
     for (size_t i=0;i<clip.tracks.size();++i) if (clip.tracks[i].name==name) return int(i);
     return -1;
 }
+Vector3 SamplePosition(const Track& track,double frame) {
+    if (track.keys.empty()) return {};
+    const Key* before=&track.keys.front(); const Key* after=before;
+    float fraction=0;
+    if (frame>=track.keys.back().frame) before=after=&track.keys.back();
+    else if (frame>before->frame) {
+        const auto next=std::upper_bound(track.keys.begin(),track.keys.end(),frame,[](double value,const Key& key){return value<key.frame;});
+        after=&*next;before=&*(next-1);fraction=float((frame-before->frame)/(after->frame-before->frame));
+    }
+    float values[3]{};
+    for (unsigned axis=0;axis<3;++axis) values[axis]=before->position[axis]+(after->position[axis]-before->position[axis])*Bezier(after->interpolation,axis,fraction);
+    return {values[0],values[1],values[2]};
+}
 bool Parse(std::span<const uint8_t> bytes,Clip& out,std::string& error,HANDLE stop) {
     out={}; error.clear();
     try {
