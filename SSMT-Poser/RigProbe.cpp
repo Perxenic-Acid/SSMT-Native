@@ -2,6 +2,7 @@
 #include "LiveUnityProbe.h"
 #include "BoneWriteProbe.h"
 #include "MotionPlayback.h"
+#include "UiBridge.h"
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -362,6 +363,7 @@ bool CaptureRig(uintptr_t renderer, uintptr_t transform, uintptr_t bones, uint64
                 }
                 if (!ArmMotionRig(calls,root.transform,actor.renderer,animator.object,
                     std::span<const MotionRigBone>(motionBones,size_t(snapshot.selectedNodeCount)),activeMethod.entry,activeMethod.descriptor)) return false;
+                if (!CaptureMotionRenderers(renderers,rendererCount)) return false;
             }
         }
     }
@@ -374,6 +376,24 @@ void ReleaseRigProbe() {
     }
 }
 bool ExportRigProbe(const std::filesystem::path& directory, std::ostream& report) {
+    if (ui::Enabled()) {
+        std::vector<ui::Rig> catalog;
+        for (int i=0;i<snapshot.actorCount;++i) {
+            const auto& actor=snapshot.actors[i];const auto root=snapshot.animators[actor.animator].node;
+            if (root<0) continue;
+            bool previous=false;
+            for (int j=0;j<i;++j) previous|=snapshot.animators[snapshot.actors[j].animator].node==root&&snapshot.actors[j].head==actor.head;
+            if (previous) continue;
+            const auto& node=snapshot.nodes[root];const std::wstring name(node.name,size_t(node.nameLength));
+            const auto active=node.active&&snapshot.nodes[actor.body].active&&snapshot.nodes[actor.head].active;
+            const auto selectable=active&&PlayerBranch(root)&&snapshot.activeAvatarRoots==1;
+            unsigned bones=unsigned(actor.boneCount);
+            for (int j=i+1;j<snapshot.actorCount;++j) if (snapshot.animators[snapshot.actors[j].animator].node==root&&snapshot.actors[j].head==actor.head) bones=std::max(bones,unsigned(snapshot.actors[j].boneCount));
+            catalog.push_back({name,name,bones,active,selectable});
+        }
+        std::stable_sort(catalog.begin(),catalog.end(),[](const ui::Rig& a,const ui::Rig& b){return a.selectable>b.selectable;});
+        ui::PublishCatalog(std::move(catalog));
+    }
     report << "[RIG] complete=" << snapshot.complete << " nodes=" << snapshot.nodeCount << " rig_nodes=" << snapshot.selectedNodeCount << " bones=" << snapshot.boneCount
         << " parent_child_edges_checked=" << snapshot.checkedEdges << " core_chains=" << snapshot.coreChains << " failure_step=" << snapshot.failureStep
         << " GC_handles_verified=" << snapshot.rooted << " GC_handles_freed=" << snapshot.freed << '\n';

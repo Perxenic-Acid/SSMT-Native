@@ -50,7 +50,7 @@ method descriptor 的 class、metadata ID、参数数量和代码入口必须匹
 
 ```powershell
 cmake -S SSMT-Poser -B build-poser -A x64
-cmake --build build-poser --config Release --target SSMT-Poser PoserProbeTests --parallel
+cmake --build build-poser --config Release --target SSMT-Poser PoserProbeTests PoserUiTests --parallel
 ctest --test-dir build-poser -C Release --output-on-failure
 ./tools/pack-official-plugins.ps1 -ReleaseTag v-test -DevelopmentPluginId ssmt.poser.genshin-probe -OutputDirectory ./dist/poser-dev-packages
 ```
@@ -142,11 +142,50 @@ identity 不一致时终止，不能向未经核验或已销毁的对象恢复�
 30 次、间隔 50 ms，随后恢复。第一次恢复后保留 target roots，等待 1 秒再进行第二次；
 最终恢复后全部释放。没有该 flag 时保持原 Head 实验；没有目标名时两种写入都不武装。
 日志区分 setter/native 回读、每次恢复与视觉观察，不能把自然动画当作画面写入成功。
-单骨模式只有 localRotation setter；没有 Animator disable、冻结或 UI。
+单骨模式只有 localRotation setter；没有 Animator disable 或冻结。控制面板用于独立的动态动作模式。
+
+## 骨架与动作控制面板
+
+启用插件并通过 SSMT 启动原神后，自动显示独立的 Windows 控制面板。它由游戏窗口拥有，
+在游戏处于前台时置顶叠加，切到其他应用或最小化游戏时隐藏；关闭按钮只隐藏面板，
+不会播放、停止或释放骨架。开启 NumLock，小键盘 `.` 显示 / 隐藏。界面使用系统控件、
+GDI 与 Shell 文件选择器，不安装渲染 hook，不新增 Present callback 或修改 Plugin ABI。
+窗口 / 无边框模式可使用这种叠加窗口；独占全屏下的显示效果尚未实机验证。
+
+操作顺序：
+
+1. 自动只读采集场景；选择列表中“可绑定”的当前活动角色，点击“绑定所选骨架”。
+2. 点击“选择…”或拖入 / 填写 VMD 路径，点击“载入 / 重载”。载入不会自动播放。
+3. 点击“播放”；点击“停止并恢复”恢复播放前旋转。显示动作轨道数、时长及播放进度。
+4. 停止后可“载出”动作、选择其他文件，或“释放骨架”并重新绑定；这些操作无需重启 DLL。
+
+只允许绑定唯一活动 AvatarRoot / EntityRoot 分支的角色；其他 Actor / NPC 可出现在只读列表，
+非活动角色不能绑定。选择携带快照 generation，worker 拒绝旧快照、同名歧义及只读候选；
+随后在游戏主线程重新枚举并检查真实身份，界面不持有 Unity 裸指针。
+自动扫描每轮最多 120 次、间隔 5 秒；超时后等待手动“刷新”，不无限扫描。
+有既有 `target_actor_name.txt` 时保留自动绑定已配置目标的开发流程。
+
+播放期间禁用换骨架、刷新和文件选择 / 载入 / 载出，停止始终可用。
+停止命令优先并取消尚未执行的播放请求。关闭面板不会影响正在播放的动作；
+插件 shutdown 先停止 worker、恢复并释放游戏资源，再等待 UI 线程及模态文件选择器退出。
+文件选择器使用 `IFileOpenDialog`，不改变游戏进程的工作目录。
+界面和 worker 通过有界命令队列及按值快照通信；LateUpdate 写入只发布原子进度数值，
+不访问 UI mutex、窗口、文件或字符串。
+
+`PoserUiTests` 覆盖过期 / 歧义 / NPC 选择、中文路径、控件状态、停止优先及窗口重建。
+以下独立演示不连接游戏，可检查真实控件、保存截图，并测试文件选择器取消与卸载：
+
+```powershell
+./build-poser/Release/PoserUiTests.exe --preview C:/已有目录/poser-controls.png
+```
+
+真实游戏中的 GUI 绑定 / 播放 / 恢复流程仍需实机验证；演示数据不能当作游戏采集结果。
+现代文件对话框接口参考 [Microsoft Common Item Dialog](https://learn.microsoft.com/windows/win32/shell/common-file-dialog)。
 
 ## 动态 VMD 旋转预览
 
-用户要求动态动作后新增独立的 `motion_mode.flag` 模式。开启 NumLock，小键盘 0 确认
+GUI 启用时自动进入动态动作模式及只读采集，无需采集按键。旧开发流程也可使用
+独立的 `motion_mode.flag` 模式。开启 NumLock，小键盘 0 确认
 场景并绑定唯一活动 AvatarRoot 下配置的 Actor；小键盘 1 从 diagnostics 目录的 UTF-8
 `motion_path.txt` 读取路径并加载 / 重载 VMD 从头播放；小键盘 2 停止并恢复播放前的旋转；
 小键盘 3 结束会话并释放 hook / GC roots。主键盘数字和 F 功能键不触发探针命令。
@@ -173,6 +212,12 @@ SZARRAY 返回与 64 字节复制布局，并与 native bind 数据逐项比较�
 计算 localRotation，以抵消其动画旋转。仍未覆盖骨骼 localPosition / scale 或禁用全部姿态系统，
 因此不能声称已完全屏蔽游戏动画、物理和叠加效果。完整 A-pose 隔离与 PMX 轴校准继续待办。
 模型的 bind pose 是否为 A-pose 必须从实际数据核验，不能由名称或单位 Quaternion 假定。
+
+VMD 第 0 帧可以包含非单位旋转与非零位移，它代表开场动作，不自动等于源模型的静态姿态。
+加载报告输出 `[VMD_START_POSE]` 和映射骨的 `[VMD_START_BONE]`，记录源模型名、首帧旋转 / 位置
+及首关键帧编号。保留这些动作值，不自动用首帧求逆或减掉位置。
+源 PMX 的静止姿态 / 骨轴与目标 Mesh 的 A-pose 是两套参考；当前标准 MMD 层级未取得源 PMX
+reference，不能由首帧反推出模型基准。需要独立核验源 / 目标参考转换和 IK / center 位移关系。
 
 诊断目录 `foot_ik_scale.txt` 可显式配置正数、最大为 1 的“游戏单位 / VMD 位移单位”，
 武装当前实验两骨 IK：按各轴贝塞尔曲线采样左右足 IK 位置，以静态 bind 脚位置为锚点，
@@ -238,3 +283,58 @@ MinHook 复用工作区的已有源码并静态链接；包内 `MinHook-LICENSE.
 最初探针计划参考 honxi1/Endfield-Poser 和 OedoSoldier/Endfield-Poser。
 当前探针与 native backend 为独立实现，复用本工作区同样本的 metadata 解码研究，
 没有迁移这两个外部仓库的实现或依赖。后续若直接迁移源码，须保留来源与许可证。
+# FK Basis A/B 实验
+
+`MMD_TOOLS_BASIS_AB_TEST` 是可回退的实验模式。默认不存在 `motion_ab.txt` 时继续使用原播放路线。
+诊断目录中的配置格式为 `legacy|basis identity|x|y|z|dance|frame N`，例如 `basis frame 0`。
+使用 `basis sequence` 可运行约 40 秒的连续对照：Legacy/Basis Identity、Basis X/Y/Z、Legacy/Basis 固定帧 0/30/120。
+开始与停止仍由用户操作；最后一段会保持，直到手动停止。每段独立缓存数值快照，停止后统一导出。
+两路线共用 VMD 采样、FK 映射、静态 Mesh bind reference 与 LateUpdate 后的写入时序。
+实验只驱动躯干、头颈、肩与双臂；真实 FK 链的中间骨保持静态参考。足 IK、腿轨、肩 P/C、捩骨、衣物头发从骨、位移、表情与相机不参与。
+
+停止状态下，小键盘 **6** 选择 Legacy，**7** 选择 Basis，**8** 循环 Identity → 左上臂 X/Y/Z +30° → 固定帧 0/30/120。
+仍由小键盘 **1** 或面板播放开始，**2** 或面板停止恢复；切换模式不会自动开始、停止或写入。
+固定姿态会持续到手动停止。原始 VMD 第 0 帧保持不变。
+
+Basis 使用 `C = inverse(bindModelRotation)`，`delta = C * qVMD * inverse(C)`，`local = bindLocal * delta`。
+轴映射固定为 MMD XYZ → Unity 模型 XYZ，作为本次受控实验假设；模型朝向仍需要单轴画面验证。
+Mesh 矩阵先按现有验证解码，拒绝非仿射、反射、shear 与奇异矩阵。
+没有父骨 bind matrix 的骨仅进行模型空间锚定，诊断中的 `target_bind_local` 为 `null`；不会用现场动画伪造静态参考。
+普通 Basis 对照只使用 Mesh bind reference；尼可的 `Bip001 Pelvis` 不在这些网格的蒙皮骨表中，因此该对照仍为部分 FK。
+
+停止并完成主线程恢复后，worker 输出 `mmd_basis_ab.json` 与带路线、姿态、帧号和会话时间的副本，记录两路线局部旋转、角差、实际 Unity 回读、恢复与故障结果。
+回读通过不代表视觉改善。`PoserProbeTests --basis` 验证 Identity、四元数符号不变性、独立 Rodrigues 单轴 oracle 和真实父层级组合；可额外输入只读骨架 fixture、VMD 与 JSON 输出路径。
+
+## Pelvis 与下半身 FK 对照
+
+诊断配置 `legacy fk_sequence` 在同一 VMD 的第 0、30、120 帧交替展示仅上半身和完整 FK，
+每段 6 秒，最后一段保持。小键盘 1 开始、小键盘 2 停止恢复；本模式固定 Legacy，
+不响应 6/7/8 的路线切换。腿部只使用足、膝、足首 FK 轨道；Center/Groove 位移、足 IK、
+足 D、Grant 和 Root Motion 均不参与。`legacy fk_axes` 则自动展示静态参考及 Pelvis、Spine、
+左右 Thigh 的 X/Y/Z 各 +30° 对照，每段 4 秒，仍由用户手动开始和停止。
+完成对照后可用 `legacy fk_dance` 连续采样同一 VMD：使用完整 FK 范围，以 30 FPS 时间轴
+播放，不再自动切换固定姿态。仍保留开场旋转，并排除位移、IK、Grant 与物理接管。
+
+完整 FK 还检查 Body 的 `+PelvisTwist CF A01`：它与 Pelvis 并列挂在 Bip001 下，不能靠真实
+父链自动跟随 Pelvis。存在该骨时，必须有有效 Body 静态参考、唯一名称、同 Actor 归属和
+上述真实父层级，才将它别名映射到现有下半身 FK 增量；校验失败拒绝播放。这是腹部
+蒙皮覆盖验证，不实现原生 twist 约束或 Grant。日志记录写入前的局部旋转，并在停止时
+恢复该骨。尼可因此为 19 个 VMD FK 来源、20 个目标映射、共 22 个写入骨。
+
+准备阶段只读枚举同 Actor 下含 inactive 的 SMR，并逐个核验 Mesh bindposes；
+这些网格仅用于诊断，不直接混合参考空间。若 Body 未提供 Pelvis，FK 对照要求取得
+该 Animator 的 Avatar 静态 `m_DefaultPose`。当前样本通过唯一序列化签名、字段名称与
+调用布局核验定位结构，并校验节点、CRC 名称/相对路径、真实父层级及读取稳定性。
+仅接受覆盖所需祖先链的有效 TRS；将静态参考与全部 Body bindposes 在同一 Actor 模型空间
+逐项比较通过后，才补充 Bip001/Pelvis。任何一步失败均拒绝该对照，不以现场动画补值。
+
+停止后输出 `pelvis_fk.*.json`，包含各阶段写入范围、静态模型/局部参考、VMD 采样、实际
+Unity 局部/世界旋转、位置只读快照及数值误差。恢复覆盖本轮曾写入骨的并集，避免在仅
+上半身阶段停止时遗漏先前写过的腿骨。参考可用和 setter 回读通过仍须与实机画面区分。
+`PoserProbeTests --avatar` 验证静态 TRS、错误层级/尺度拒绝、FK 范围与阶段控制；可另传
+本机只读 Avatar/Body fixture 核验真实静态数据。模型轴对齐仍需独立单轴实机确认。
+
+## 实机验证归档
+
+[2026-10-08 Pelvis、下半身 FK 与腹部辅助骨验证](Reports/2026-10-08-Pelvis-FK.md)
+记录静态参考来源、固定帧和单轴对照、最终连续播放及恢复结果；附可独立复核的关键骨旋转数据。

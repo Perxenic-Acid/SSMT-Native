@@ -1,6 +1,7 @@
 #include "RuntimeProbe.h"
 #include "GenshinNativeRuntime.h"
 #include "LiveUnityProbe.h"
+#include "UiBridge.h"
 #include <TlHelp32.h>
 #include <algorithm>
 #include <fstream>
@@ -311,6 +312,7 @@ void RunProbe(HANDLE stop, Log log) {
     if (initialized != NativeResult::Ready) {
         report << "result=NATIVE_RESOLVER_NOT_INITIALIZED; game_calls=NONE\n";
         log(1, "[Poser] Native resolver sample/anchor validation did not pass; see report.");
+        if (ui::Enabled()) ui::State(L"当前游戏版本或原生调用校验未通过，不能操作骨架。",false,false,false,true);
         return;
     }
     report << "phase=NATIVE_RUNTIME_RESOLVER; pid=" << GetCurrentProcessId()
@@ -326,11 +328,13 @@ void RunProbe(HANDLE stop, Log log) {
             report.flush();
             log(live ? 0 : 1, live ? "[Poser] Scene Animator/SMR readonly properties confirmed; see report and bones file." :
                 "[Poser] Scene component probe stopped; see exact call context and step in report.");
+            if (!live&&ui::Enabled()&&!ui::Read().failed) ui::State(L"骨架探针已停止。请查看诊断日志并重启测试游戏。",false,false,false,true);
             return;
         }
         if (result == NativeResult::Failed || result == NativeResult::Cancelled) {
             report << "result=NATIVE_RESOLVER_STOPPED; game_calls=NONE\n";
             log(1, "[Poser] Native runtime crosscheck failed or cancelled; see report.");
+            if (result==NativeResult::Failed&&ui::Enabled()) ui::State(L"原生运行时校验失败。请查看日志并重启测试游戏。",false,false,false,true);
             return;
         }
         if (attempt != 23 && WaitForSingleObject(stop, 5000) == WAIT_OBJECT_0) {
@@ -339,6 +343,7 @@ void RunProbe(HANDLE stop, Log log) {
     }
     report << "result=NATIVE_RUNTIME_CACHE_NOT_READY; game_calls=NONE\n";
     log(1, "[Poser] Native runtime cache did not become ready within the bounded observation period.");
+    if (ui::Enabled()) ui::State(L"运行时初始化超时。请查看日志并重启测试游戏。",false,false,false,true);
 }
 // 保留导出 backend 的已测基础设施，不在当前无导出的原神执行链重复运行它。
 void RunExportProbe(HANDLE stop, Log log) {
