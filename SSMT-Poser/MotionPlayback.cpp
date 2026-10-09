@@ -39,6 +39,8 @@ struct Bone {
     bool write=false,hasReference=false;
     bool parentReference=false;
     bool upperWrite=false,touched=false;
+    Quaternion restoreReadback{0,0,0,1},firstWritten{0,0,0,1};
+    unsigned fingerWrites=0;float fingerMotion=0;bool restoreChecked=false;
 };
 struct Source {
     wchar_t name[32]{},target[128]{};
@@ -56,6 +58,7 @@ struct Sample { DWORD thread; uint64_t tick; double frame; unsigned matched; Qua
 struct ABSnapshot {
     bool valid=false;basis::Settings settings;double frame=0,lastFrame=0;unsigned frames=0,writes=0;
     Quaternion auxiliaryBefore{0,0,0,1};bool auxiliaryCaptured=false;
+    Quaternion fingerBefore[30]{};
     Quaternion rootWorld{0,0,0,1},rotations[MaxRig]{},world[MaxRig]{},parentWorld[MaxRig]{};
     Vector3 positions[MaxRig]{};bool written[MaxRig]{};
 };
@@ -91,6 +94,7 @@ struct Playback {
     bool avatarProfile=false,avatarReady=false;
     float avatarMaxAngle=0,avatarMaxPosition=0;
     int pelvisAuxiliary=-1;bool auxiliaryRejected=false;
+    bool fingersReady=false;unsigned fingerFailure=0;
 };
 Playback playback{};
 ReferenceMesh referenceMeshes[MaxReferenceMeshes]{};
@@ -371,14 +375,43 @@ int AddSource(const std::wstring& name,const std::wstring& target,int parent) {
     if (source.node>=0 && source.track>=0 && playback.bones[source.node].hasReference) { playback.bones[source.node].source=index; ++playback.mapped; }
     return index;
 }
+bool ValidateFingerChains() {
+    playback.fingerFailure=1;
+    if(!playback.avatarReady)return false;
+    int slots[30];std::fill(std::begin(slots),std::end(slots),-1);
+    for(unsigned i=0;i<playback.sourceCount;++i) {
+        const auto slot=fingers::Slot(playback.sources[i].name);
+        if(slot>=0){if(slots[slot]>=0)return false;slots[slot]=int(i);}
+    }
+    for(unsigned finger=0;finger<10;++finger) {
+        playback.fingerFailure=finger+2;fingers::Node chain[4];
+        const auto hand=Named(finger<5?L"Bip001 L Hand":L"Bip001 R Hand");
+        if(hand<0)return false;
+        const auto& wrist=playback.bones[hand];
+        chain[0]={hand,wrist.identity.parent,wrist.identity.owned&&wrist.hasReference,wrist.rest.position};
+        for(unsigned joint=0;joint<3;++joint) {
+            const auto sourceIndex=slots[finger*3+joint];if(sourceIndex<0)return false;
+            const auto& source=playback.sources[sourceIndex];if(source.node<0||source.parent<0)return false;
+            const auto& bone=playback.bones[source.node];
+            if(playback.sources[source.parent].node!=chain[joint].index||bone.source!=sourceIndex||!bone.write||bone.identity.skinIndex<0||avatarScratch.sourceNode[source.node]<0)return false;
+            chain[joint+1]={source.node,bone.identity.parent,bone.identity.owned&&bone.hasReference&&bone.parentReference,bone.rest.position};
+        }
+        if(!fingers::Chain(chain))return false;
+    }
+    playback.fingerFailure=12;
+    auto position=[](const wchar_t* name){return playback.bones[Named(name)].rest.position;};
+    // 十条链已证明这些名称唯一存在；朝向不匹配时拒绝套用整个 FK 的坐标校准。
+    if(!fingers::ModelFrame(position(L"Bip001 L Hand"),position(L"Bip001 R Hand"),position(L"Bip001 L Finger0"),position(L"Bip001 L Finger4"),position(L"Bip001 R Finger0"),position(L"Bip001 R Finger4")))return false;
+    playback.fingerFailure=0;return true;
+}
 void BuildSources() {
     playback.sourceCount=0; playback.mapped=0;playback.pelvisAuxiliary=-1;playback.auxiliaryRejected=false;
+    playback.fingersReady=false;playback.fingerFailure=0;
     for (auto& bone:playback.bones) { bone.source=-1; bone.write=false;bone.upperWrite=false; }
     const auto all=AddSource(L"全ての親",L"",-1),center=AddSource(L"センター",L"",all),groove=AddSource(L"グルーブ",L"",center),waist=AddSource(L"腰",L"",groove);
     const auto lower=AddSource(L"下半身",L"Bip001 Pelvis",waist),upper=AddSource(L"上半身",L"Bip001 Spine",waist);
     const auto upper2=AddSource(L"上半身2",L"Bip001 Spine2",upper),upper3=AddSource(L"上半身3",L"",upper2);
     const auto neck=AddSource(L"首",L"Bip001 Neck",upper3); AddSource(L"頭",L"Bip001 Head",neck);
-    const wchar_t* fingerNames[]={L"親指",L"人指",L"中指",L"薬指",L"小指"};
     for (unsigned side=0;side<2;++side) {
         const std::wstring prefix=side?L"右":L"左",target=side?L"Bip001 R ":L"Bip001 L ";
         const auto shoulderP=AddSource(prefix+L"肩P",L"",upper3),shoulder=AddSource(prefix+L"肩",target+L"Clavicle",shoulderP),shoulderC=AddSource(prefix+L"肩C",L"",shoulder);
@@ -398,7 +431,7 @@ void BuildSources() {
                 const auto digit=wchar_t(L'０'+joint+(finger?1:0));
                 auto bone=target+L"Finger"+std::to_wstring(finger);
                 if (joint) bone+=std::to_wstring(joint);
-                const auto source=AddSource(prefix+fingerNames[finger]+digit,bone,parent); parent=source;
+                const auto source=AddSource(prefix+std::wstring(fingers::Names[finger])+digit,bone,parent); parent=source;
                 if (finger==1 && playback.sources[source].track<0) {
                     playback.sources[source].track=Track(prefix+L"人差指"+digit);
                     if (playback.sources[source].track>=0 && playback.sources[source].node>=0 && playback.bones[playback.sources[source].node].hasReference) { playback.bones[playback.sources[source].node].source=source; ++playback.mapped; }
@@ -416,10 +449,11 @@ void BuildSources() {
         for (auto& bone:playback.bones) {bone.write=false;bone.source=-1;bone.parentReference=false;}
         for (unsigned i=0;i<playback.sourceCount;++i) {
             const auto& source=playback.sources[i];
-            if ((!basis::MainFk(source.name)&&!(basis::FkTest(abSettings)&&basis::LegsFk(source.name)))||source.node<0) continue;
+            const bool finger=basis::FkTest(abSettings)&&fingers::Slot(source.name)>=0;
+            if ((!basis::MainFk(source.name)&&!(basis::FkTest(abSettings)&&basis::LegsFk(source.name))&&!finger)||source.node<0) continue;
             auto& bone=playback.bones[source.node];if (!bone.hasReference) continue;
             bone.source=int(i);bone.write=true;++playback.mapped;
-            const bool upperScope=basis::MainFk(source.name)&&std::wstring_view(source.name)!=L"下半身";
+            const bool upperScope=finger||(basis::MainFk(source.name)&&std::wstring_view(source.name)!=L"下半身");
             bone.upperWrite=upperScope;
             // 仅静态锁定所选 FK 链中的真实中间骨；腿部只在完整 FK 对照中接管。
             for (auto parent=bone.identity.parent;parent>=0;parent=playback.bones[parent].identity.parent)
@@ -448,6 +482,7 @@ void BuildSources() {
             bone.basisLocal=vmd::Inverse(bone.rest.rotation);
             if (bone.parentReference) bone.bindLocal=basis::BindLocal(playback.bones[parent].rest.rotation,bone.rest.rotation);
         }
+        if(basis::FkTest(abSettings))playback.fingersReady=ValidateFingerChains();
     }
     for (unsigned side=0;side<2;++side) {
         auto& leg=playback.legs[side];leg={};
@@ -591,7 +626,7 @@ bool SolveIK(double frame,float blend) {
 void SourcePose(double frame,const basis::Settings& settings) {
     for (unsigned i=0;i<playback.sourceCount;++i) {
         auto& source=playback.sources[i];
-        const auto sampled=source.track>=0&&(!settings.enabled||basis::MainFk(source.name)||(basis::FkTest(settings)&&basis::LegsFk(source.name)))?vmd::Sample(clip.tracks[source.track],frame):Quaternion{0,0,0,1};
+        const auto sampled=source.track>=0&&(!settings.enabled||basis::MainFk(source.name)||(basis::FkTest(settings)&&(basis::LegsFk(source.name)||fingers::Slot(source.name)>=0)))?vmd::Sample(clip.tracks[source.track],frame):Quaternion{0,0,0,1};
         const auto local=basis::Input(settings,source.name,sampled);
         source.currentWorld=source.parent>=0?vmd::Multiply(playback.sources[source.parent].currentWorld,local):local;
     }
@@ -602,8 +637,9 @@ bool Stop() {
     if (playback.captured) {
         restored=OwnerIdentity(false); playback.restoredBones=0;
         for (unsigned i=0;restored && i<playback.boneCount;++i) if (playback.bones[i].touched) {
-            const auto& bone=playback.bones[i]; Quaternion after{};
+            auto& bone=playback.bones[i]; Quaternion after{};
             restored=BoneIdentity(bone) && WriteBoneRotation(bone.identity.object,bone.restoreRotation) && ReadBoneRotation(bone.identity.object,bone.identity.native,after) && bone_detail::Same(after,bone.restoreRotation);
+            bone.restoreReadback=after;bone.restoreChecked=restored;
             if (restored) ++playback.restoredBones;
         }
         playback.restore=restored;
@@ -617,7 +653,7 @@ void Tick() {
     if (!OwnerIdentity()) { playback.fault=1; enabled=false; status=3; return; }
     const auto tick=GetTickCount64();
     const auto stage=basis::FkTest(abSettings)?basis::FkStage(tick-playback.startTick,abSettings.pose):abSettings.enabled&&abSettings.pose==basis::Pose::Sequence?basis::Stage(tick-playback.startTick):0;
-    const auto settings=basis::FkTest(abSettings)?basis::FkStageSettings(stage,abSettings.pose):abSettings.enabled&&abSettings.pose==basis::Pose::Sequence?basis::StageSettings(stage):abSettings;
+    const auto settings=basis::FkTest(abSettings)?basis::FkStageSettings(stage,abSettings):abSettings.enabled&&abSettings.pose==basis::Pose::Sequence?basis::StageSettings(stage):abSettings;
     // 连续预览只在首次跨过 0/30/120 时各采样一帧精确参考，随后立即继续时间轴。
     const double frame=basis::SampleFrame(settings,tick-playback.startTick,!playback.abSnapshots[stage].valid);
     progressSeconds.store(float(frame/30.0),std::memory_order_relaxed);
@@ -664,11 +700,20 @@ void Tick() {
             }
         }
         Quaternion after{};
+        const auto finger=bone.source>=0?fingers::Slot(playback.sources[bone.source].name):-1;
+        if(basis::FkTest(settings)&&finger>=0&&!playback.abSnapshots[stage].valid&&
+            (!BoneIdentity(bone)||!ReadBoneRotation(bone.identity.object,bone.identity.native,playback.abSnapshots[stage].fingerBefore[finger]))) {
+            playback.fault=6;enabled=false;status=3;return;
+        }
         bone.touched=true;
         if (!BoneIdentity(bone) || !WriteBoneRotation(bone.identity.object,desiredLocal) || !ReadBoneRotation(bone.identity.object,bone.identity.native,after) || !bone_detail::Same(after,desiredLocal)) {
             playback.fault=2; enabled=false; status=3; return;
         }
         ++matched; ++playback.writes;
+        if(finger>=0) {
+            if(!bone.fingerWrites)bone.firstWritten=after;
+            ++bone.fingerWrites;bone.fingerMotion=std::max(bone.fingerMotion,basis::Angle(bone.firstWritten,after));
+        }
         if (abSettings.enabled) bone.lastWritten=after;
     }
     if (!SolveIK(frame,blend)) {playback.fault=4;enabled=false;status=3;return;}
@@ -726,6 +771,11 @@ bool ConfigureMotionAB(const std::filesystem::path& directory,std::ostream& repo
         else if (route=="legacy"&&pose=="fk_sequence") next.pose=basis::Pose::FkSequence;
         else if (route=="legacy"&&pose=="fk_axes") next.pose=basis::Pose::FkAxes;
         else if (route=="legacy"&&pose=="fk_dance") {next.pose=basis::Pose::FkDance;next.fullFK=true;}
+        else if (route=="legacy"&&pose=="finger_test"&&input>>next.frame&&std::isfinite(next.frame)&&next.frame>=0&&next.frame<=1000000) {next.pose=basis::Pose::FingerTest;next.fullFK=true;}
+        else if (route=="legacy"&&pose=="finger_sequence"&&input>>next.fingerFrames[0]>>next.fingerFrames[1]>>next.fingerFrames[2]) {
+            for(const auto frame:next.fingerFrames)if(!std::isfinite(frame)||frame<0||frame>1000000){report<<"AB_config=REJECTED_FINGER_FRAME\n";return false;}
+            next.pose=basis::Pose::FingerFrames;next.fullFK=true;
+        }
         else if (pose=="frame"&&input>>next.frame&&std::isfinite(next.frame)&&next.frame>=0&&next.frame<=1000000) next.pose=basis::Pose::Frame;
         else {report<<"AB_config=REJECTED_POSE\n";return false;}
         if (input>>extra) {report<<"AB_config=REJECTED_TRAILING_DATA\n";return false;}
@@ -733,7 +783,9 @@ bool ConfigureMotionAB(const std::filesystem::path& directory,std::ostream& repo
     abSettings=next;
     if (!clip.tracks.empty()&&playback.referenceReady) BuildSources();
     report<<"[MMD_TOOLS_BASIS_AB_TEST] enabled="<<next.enabled<<" route="<<basis::RouteName(next.route)<<" pose="<<basis::PoseName(next.pose)<<" frame="<<next.frame
-        <<" axes=MMD_XYZ_TO_UNITY_MODEL_XYZ; axis_alignment=EXPERIMENT_ASSUMPTION; IK="<<(next.enabled?"OFF":footIK?"CONFIGURED":"OFF")<<"; source_frame0=PRESERVED\n";
+        <<" axes="<<(basis::FkTest(next)?"FK_MODEL_Y_180":"MMD_XYZ_TO_UNITY_MODEL_XYZ")
+        <<"; axis_alignment="<<(basis::FkTest(next)?"STATIC_GEOMETRY_GATED_VISUAL_CHECK_REQUIRED":"EXPERIMENT_ASSUMPTION")
+        <<"; IK="<<(next.enabled?"OFF":footIK?"CONFIGURED":"OFF")<<"; source_frame0=PRESERVED\n";
     report.flush();return true;
 }
 bool SelectMotionAB(unsigned command,std::ostream& report) {
@@ -769,7 +821,7 @@ void ReportMotionFK(std::ostream& report) {
             <<"\",\"pose\":\""<<basis::PoseName(snapshot.settings.pose)<<"\",\"frame\":"<<snapshot.frame<<",\"last_frame\":"<<snapshot.lastFrame<<",\"stage\":"<<stage<<",\"axis_bone\":"<<snapshot.settings.axisBone<<",\"axis\":"<<snapshot.settings.axis
             <<",\"frames\":"<<snapshot.frames<<",\"writes\":"<<snapshot.writes<<",\"fault\":"<<playback.fault<<",\"restore\":"<<(playback.restore?"true":"false")
             <<",\"restored_bones\":"<<playback.restoredBones<<",\"avatar_reference_ready\":"<<(playback.avatarReady?"true":"false")
-            <<",\"axis_alignment\":\"S=I_PENDING_VISUAL_AXIS_CALIBRATION\",\"translation\":\"NOT_WRITTEN\",\"IK\":false,\"root_motion\":false,\"bones\":[";
+            <<",\"axis_alignment\":\"FK_MODEL_Y_180\",\"body_axis_alignment\":\"MODEL_Y_180\",\"finger_axis_alignment\":\"MODEL_Y_180\",\"finger_test_scope\":\"BOTH_HANDS_BY_DIGIT\",\"translation\":\"NOT_WRITTEN\",\"IK\":false,\"root_motion\":false,\"bones\":[";
         bool first=true;
         for(unsigned order=0;order<playback.boneCount;++order) {
             const auto index=playback.order[order];const auto& bone=playback.bones[index];if(!bone.write)continue;
@@ -785,7 +837,15 @@ void ReportMotionFK(std::ostream& report) {
             if(bone.source>=0)WideCharToMultiByte(CP_UTF8,0,playback.sources[bone.source].name,-1,source,sizeof(source),nullptr,nullptr);
             json<<"{\"name\":\""<<name<<"\",\"source\":\""<<source<<"\",\"index\":"<<index<<",\"parent\":"<<parent<<",\"written\":"<<(snapshot.written[index]?"true":"false")
                 <<",\"pelvis_auxiliary\":"<<(int(index)==playback.pelvisAuxiliary?"true":"false")<<",\"before_local\":";
-            if(int(index)==playback.pelvisAuxiliary&&snapshot.auxiliaryCaptured)jq(json,snapshot.auxiliaryBefore);else json<<"null";
+            const auto finger=bone.source>=0?fingers::Slot(playback.sources[bone.source].name):-1;
+            if(int(index)==playback.pelvisAuxiliary&&snapshot.auxiliaryCaptured)jq(json,snapshot.auxiliaryBefore);
+            else if(finger>=0)jq(json,snapshot.fingerBefore[finger]);else json<<"null";
+            if(finger>=0) {
+                const auto track=playback.sources[bone.source].track;
+                json<<",\"finger_slot\":"<<finger<<",\"track_present\":"<<(track>=0?"true":"false")<<",\"track_keys\":"<<(track>=0?clip.tracks[track].keys.size():0)
+                    <<",\"missing_track_policy\":\"IDENTITY_LOCAL_DELTA_INHERIT_PARENT\",\"finger_writes\":"<<bone.fingerWrites<<",\"session_local_motion_deg\":"<<bone.fingerMotion
+                    <<",\"restore_checked\":"<<(bone.restoreChecked?"true":"false")<<",\"restore_readback\":";jq(json,bone.restoreReadback);
+            }
             json<<",\"restore_rotation\":";jq(json,bone.restoreRotation);json<<",\"bind_model_rotation\":";jq(json,bone.rest.rotation);
             json<<",\"bind_model_position\":["<<bone.rest.position.x<<','<<bone.rest.position.y<<','<<bone.rest.position.z<<"],\"bind_local_rotation\":";
             if(bone.parentReference)jq(json,bone.bindLocal);else json<<"null";
@@ -848,11 +908,15 @@ void ReportMotionAB(std::ostream& report) {
 unsigned MotionABStage(){return abStage.load(std::memory_order_acquire);}
 std::wstring ReportMotionABStage(unsigned stage,std::ostream& report) {
     if(basis::FkTest(abSettings)) {
-        if(stage>=(abSettings.pose==basis::Pose::FkDance?3:abSettings.pose==basis::Pose::FkAxes?basis::FkAxesStages:basis::FkStages))return {};
-        const auto settings=basis::FkStageSettings(stage,abSettings.pose);
+        if(stage>=(abSettings.pose==basis::Pose::FingerTest?6:abSettings.pose==basis::Pose::FingerFrames?3:abSettings.pose==basis::Pose::FkDance?3:abSettings.pose==basis::Pose::FkAxes?basis::FkAxesStages:basis::FkStages))return {};
+        const auto settings=basis::FkStageSettings(stage,abSettings);
         report<<"[FK_STAGE] index="<<stage<<" scope="<<(settings.fullFK?"FullFK":"UpperOnly")<<" pose="<<basis::PoseName(settings.pose)<<" frame="<<settings.frame
             <<" axis_bone="<<settings.axisBone<<" axis="<<settings.axis<<"; manual_stop=NUMPAD2\n";report.flush();
         if(settings.pose==basis::Pose::FkDance)return L"Legacy FK：完整骨架，连续 VMD 播放。小键盘 2 停止恢复。";
+        if(settings.pose==basis::Pose::FingerTest) {
+            if(settings.axisBone<0)return L"手指对照：静态参考；随后逐指展示 VMD 手势，小键盘 2 停止恢复。";
+            return L"双手"+std::wstring(fingers::Names[settings.axisBone])+L"：独立手势，其余骨保持静态参考。小键盘 2 停止恢复。";
+        }
         if(settings.pose==basis::Pose::FkAxes) {
             if(settings.axisBone<0)return L"FK 单轴对照 1/13：静态参考。小键盘 2 停止恢复。";
             const wchar_t* names[]={L"Pelvis",L"Spine",L"左 Thigh",L"右 Thigh"};const wchar_t* axes[]={L"X",L"Y",L"Z"};
@@ -1050,7 +1114,14 @@ bool LoadMotionClip(const std::filesystem::path& path,std::ostream& report,HANDL
     }
     report.flush();
     report<<"[FK_AUXILIARY] mapped="<<(playback.pelvisAuxiliary>=0)<<" rejected="<<playback.auxiliaryRejected<<" source=LowerBody_FK; bone=+PelvisTwist_CF_A01; static_reference=MESH_BIND; physics=NOT_SOLVED\n";
-    const auto ready=playback.mapped&&playback.writeBones&&!playback.auxiliaryRejected;
+    if(basis::FkTest(abSettings)) {
+        report<<"[FINGER_FK] ready="<<playback.fingersReady<<" failure="<<playback.fingerFailure<<" expected_joints=30 reference=AVATAR_DEFAULT_POSE_CROSSCHECKED_BODY_BIND; body_and_finger_axes=MODEL_Y_180; missing_track=IDENTITY_LOCAL_DELTA_INHERIT_PARENT\n";
+        for(const auto& source:playback.sources)if(fingers::Slot(source.name)>=0) {
+            char name[128]{};WideCharToMultiByte(CP_UTF8,0,source.name,-1,name,sizeof(name),nullptr,nullptr);
+            report<<"[FINGER_TRACK] source="<<name<<" node="<<source.node<<" present="<<(source.track>=0)<<" keys="<<(source.track>=0?clip.tracks[source.track].keys.size():0)<<'\n';
+        }
+    }
+    const auto ready=playback.mapped&&playback.writeBones&&!playback.auxiliaryRejected&&(!basis::FkTest(abSettings)||playback.fingersReady);
     if (ready&&ui::Enabled()) ui::Motion(path.wstring(),unsigned(clip.tracks.size()),float(clip.lastFrame)/30);
     return ready;
 }
@@ -1068,7 +1139,7 @@ bool MotionMainStep(unsigned mode) {
     if (mode==9) return CaptureReference();
     if (mode!=7 || !OwnerIdentity() || !playback.referenceReady || playback.captured || !playback.mapped || !playback.writeBones) return false;
     if(basis::FkTest(abSettings)) {
-        if(playback.auxiliaryRejected||!playback.avatarReady||!playback.avatarHandle||reinterpret_cast<uintptr_t (*)(uintptr_t,uintptr_t)>(avatarGetter.entry)(playback.owner[2],avatarGetter.descriptor)!=playback.referenceAvatar)return false;
+        if(playback.auxiliaryRejected||!playback.fingersReady||!playback.avatarReady||!playback.avatarHandle||reinterpret_cast<uintptr_t (*)(uintptr_t,uintptr_t)>(avatarGetter.entry)(playback.owner[2],avatarGetter.descriptor)!=playback.referenceAvatar)return false;
         uintptr_t native=0;if(!Read(playback.referenceAvatar+0x10,native)||native!=playback.referenceAvatarNative)return false;
     }
     const auto currentMesh=reinterpret_cast<uintptr_t (*)(uintptr_t,uintptr_t)>(meshGetter.entry)(playback.owner[1],meshGetter.descriptor);
@@ -1077,7 +1148,7 @@ bool MotionMainStep(unsigned mode) {
         auto& bone=playback.bones[i];
         if (!BoneIdentity(bone) || !ReadBoneRotation(bone.identity.object,bone.identity.native,bone.restoreRotation)) return false;
     }
-    for (auto& bone:playback.bones) {bone.desiredWorld=bone.rest.rotation;bone.touched=false;}
+    for (auto& bone:playback.bones) {bone.desiredWorld=bone.rest.rotation;bone.touched=false;bone.restoreChecked=false;bone.fingerWrites=0;bone.fingerMotion=0;}
     if(!abSettings.enabled||abSettings.route==basis::Route::Legacy)SourcePose(0,abSettings);
     if (!PrepareIK()) return false;
     playback.frames=0; playback.writes=0; playback.restoredBones=0; playback.fault=0; playback.sampleCount=0; playback.maxTickMicroseconds=0;
