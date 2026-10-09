@@ -116,6 +116,10 @@ void VmdTests() {
     Require(bone_detail::Valid(middle) && std::fabs(2*std::acos(middle.w)*180/3.141592653589793-30)<0.01,"VMD rotation block or Slerp incorrect");
     Require(bone_detail::Same(vmd::Sample(clip.tracks[0],-1),Quaternion{0,0,0,1}),"duplicate final frame not selected");
     Require(bone_detail::Same(vmd::Sample(clip.tracks[0],100),clip.tracks[0].keys.back().rotation),"end frame not held");
+    auto posed=clip.tracks[0];posed.keys.front().rotation=posed.keys.back().rotation;posed.keys.front().position={1,2,3};
+    Require(bone_detail::Same(vmd::Sample(posed,0),posed.keys.front().rotation),"nonidentity opening pose was zeroed");
+    const auto openingPosition=vmd::SamplePosition(posed,0);
+    Require(openingPosition.x==1&&openingPosition.y==2&&openingPosition.z==3,"opening translation was subtracted");
     Require(bone_detail::Same(vmd::Slerp({0,0,0,1},{0,0,0,-1},0.5f),{0,0,0,1}),"Slerp hemisphere mismatch");
     auto asymmetric=clip.tracks[0].keys.back().interpolation;
     asymmetric[48]=10;asymmetric[52]=110;asymmetric[56]=60;asymmetric[60]=127;
@@ -446,7 +450,11 @@ void AbiTests(const wchar_t* path) {
     FreeLibrary(library);
 }
 }
+int RunBasisTests(int argc,wchar_t** argv);
+int RunAvatarTests(int argc,wchar_t** argv);
 int wmain(int argc, wchar_t** argv) {
+    if(argc>=2&&std::wstring_view(argv[1])==L"--basis")return RunBasisTests(argc-1,argv+1);
+    if(argc>=2&&std::wstring_view(argv[1])==L"--avatar")return RunAvatarTests(argc-1,argv+1);
     try {
         Require(argc >= 2, "usage: PoserProbeTests <SSMT-Poser.dll> [VMD samples...]");
         MetadataTests(); ResolverTests(); NativeResolverGuards(); LiveObjectGuards(); BoneMathTests(); AnimationHookAbiTests(); VmdTests(); LegIKTests(); ReferencePoseTests(); MotionRigGuards(); AbiTests(argv[1]);

@@ -1,0 +1,1357 @@
+{
+  "numeric_validation": "PASS",
+  "complete_fixed_frame_runs": [],
+  "complete_axis_runs": [],
+  "complete_continuous_reference_runs": [
+    "80929203"
+  ],
+  "waist_comparison": [],
+  "runs": {
+    "80929203": [
+      {
+        "file": "pelvis_fk.FKDance.0.80929203.json",
+        "pose": "FKDance",
+        "stage": 0,
+        "frame": 0,
+        "scope": "FullFK",
+        "frames": 57,
+        "writes": 1254,
+        "written_bones": 22,
+        "restored_bones": 22,
+        "last_frame": 29.52,
+        "max_local_error_deg": 1.3015076515412004e-05,
+        "max_world_error_deg": 2.5270977245889666e-05,
+        "bones": [
+          {
+            "name": "Bip001",
+            "source": "",
+            "parent": 1,
+            "bind_local_rotation": null,
+            "unity_local": [
+              -0.500000477,
+              0.499999583,
+              0.499999583,
+              0.500000477
+            ],
+            "independent_local_error_deg": 6.875487399480393e-06,
+            "independent_world_error_deg": 6.361109362927035e-15
+          },
+          {
+            "name": "+PelvisTwist CF A01",
+            "source": "下半身",
+            "parent": 11,
+            "bind_local_rotation": [
+              0.523879111,
+              0.474916697,
+              -0.474979162,
+              0.523831606
+            ],
+            "unity_local": [
+              0.57895714,
+              -0.432112068,
+              -0.558125794,
+              -0.408146441
+            ],
+            "independent_local_error_deg": 4.267571920064173e-06,
+            "independent_world_error_deg": 7.889759416412003e-06
+          },
+          {
+            "name": "Bip001 Pelvis",
+            "source": "下半身",
+            "parent": 11,
+            "bind_local_rotation": [
+              -0.500000179,
+              0.49999994,
+              0.499999195,
+              0.500000715
+            ],
+            "unity_local": [
+              0.434919417,
+              0.537516117,
+              -0.40325287,
+              0.599423707
+            ],
+            "independent_local_error_deg": 5.066267843074714e-06,
+            "independent_world_error_deg": 8.761752370250807e-06
+          },
+          {
+            "name": "Bip001 R Thigh",
+            "source": "右足",
+            "parent": 10,
+            "bind_local_rotation": [
+              0.00587895466,
+              0.999296069,
+              -0.0231003445,
+              0.0289685857
+            ],
+            "unity_local": [
+              0.00587895419,
+              0.999296069,
+              -0.0231004618,
+              0.0289685968
+            ],
+            "independent_local_error_deg": 9.739986044843257e-06,
+            "independent_world_error_deg": 1.8206894596321133e-05
+          },
+          {
+            "name": "Bip001 Spine",
+            "source": "上半身",
+            "parent": 10,
+            "bind_local_rotation": [
+              2.07126141e-06,
+              1.49011612e-07,
+              0.0503663868,
+              -0.998730779
+            ],
+            "unity_local": [
+              -0.0533965603,
+              -0.0263113044,
+              0.119821772,
+              -0.991009235
+            ],
+            "independent_local_error_deg": 6.483668515023941e-06,
+            "independent_world_error_deg": 6.4471934368431055e-06
+          },
+          {
+            "name": "Bip001 L Thigh",
+            "source": "左足",
+            "parent": 10,
+            "bind_local_rotation": [
+              0.00588707626,
+              0.999296069,
+              0.0230987072,
+              -0.0289684981
+            ],
+            "unity_local": [
+              0.0058871503,
+              0.999296129,
+              0.023098601,
+              -0.0289684944
+            ],
+            "independent_local_error_deg": 8.682808241770201e-06,
+            "independent_world_error_deg": 1.925807856367148e-05
+          },
+          {
+            "name": "Bip001 Spine1",
+            "source": "",
+            "parent": 9,
+            "bind_local_rotation": [
+              -8.94069672e-08,
+              -8.94069672e-08,
+              0.0675628483,
+              0.997714996
+            ],
+            "unity_local": [
+              -1.1920929e-07,
+              -1.04308128e-07,
+              0.0675629675,
+              0.997714996
+            ],
+            "independent_local_error_deg": 9.421621688108511e-06,
+            "independent_world_error_deg": 1.6971301222421068e-05
+          },
+          {
+            "name": "Bip001 R Calf",
+            "source": "右ひざ",
+            "parent": 48,
+            "bind_local_rotation": [
+              2.98023224e-08,
+              -5.96046448e-08,
+              0.042415902,
+              0.999100029
+            ],
+            "unity_local": [
+              0,
+              0,
+              0.0424158163,
+              0.999100029
+            ],
+            "independent_local_error_deg": 1.158472767393555e-05,
+            "independent_world_error_deg": 2.0485822816413743e-05
+          },
+          {
+            "name": "Bip001 L Calf",
+            "source": "左ひざ",
+            "parent": 27,
+            "bind_local_rotation": [
+              2.98023224e-08,
+              -2.98023224e-08,
+              0.0424028039,
+              0.999100626
+            ],
+            "unity_local": [
+              -4.47034765e-08,
+              -1.19209275e-07,
+              0.0424027555,
+              0.999100626
+            ],
+            "independent_local_error_deg": 4.344172179180477e-06,
+            "independent_world_error_deg": 1.2372625425786626e-05
+          },
+          {
+            "name": "Bip001 L Foot",
+            "source": "左足首",
+            "parent": 26,
+            "bind_local_rotation": [
+              0.0366093516,
+              0.0270480216,
+              0.0499244034,
+              -0.997715235
+            ],
+            "unity_local": [
+              0.0366093554,
+              0.0270479843,
+              0.0499244928,
+              -0.997715235
+            ],
+            "independent_local_error_deg": 5.13420418458277e-06,
+            "independent_world_error_deg": 9.6196806449041e-06
+          },
+          {
+            "name": "Bip001 R Foot",
+            "source": "右足首",
+            "parent": 47,
+            "bind_local_rotation": [
+              0.036609143,
+              0.0270455182,
+              -0.0499290824,
+              0.997715116
+            ],
+            "unity_local": [
+              0.0366090648,
+              0.0270453803,
+              -0.0499289408,
+              0.997715116
+            ],
+            "independent_local_error_deg": 8.275315658682635e-06,
+            "independent_world_error_deg": 1.436194570673559e-05
+          },
+          {
+            "name": "Bip001 Spine2",
+            "source": "上半身2",
+            "parent": 8,
+            "bind_local_rotation": [
+              0,
+              -4.76837158e-07,
+              0.124971032,
+              0.99216038
+            ],
+            "unity_local": [
+              -0.0606381968,
+              0.00423857523,
+              0.0507834181,
+              0.99685812
+            ],
+            "independent_local_error_deg": 4.481807258084168e-06,
+            "independent_world_error_deg": 9.892455571836455e-06
+          },
+          {
+            "name": "Bip001 L Clavicle",
+            "source": "左肩",
+            "parent": 7,
+            "bind_local_rotation": [
+              -0.589803636,
+              -0.114550158,
+              0.794900775,
+              0.0845137909
+            ],
+            "unity_local": [
+              -0.464850515,
+              0.0540983379,
+              0.874427617,
+              0.127920732
+            ],
+            "independent_local_error_deg": 4.922250000262574e-06,
+            "independent_world_error_deg": 2.5270977245889666e-05
+          },
+          {
+            "name": "Bip001 R Clavicle",
+            "source": "右肩",
+            "parent": 7,
+            "bind_local_rotation": [
+              -0.589803874,
+              -0.114547886,
+              -0.794901133,
+              -0.0845121071
+            ],
+            "unity_local": [
+              -0.530707061,
+              -0.132162541,
+              -0.829796314,
+              -0.11100135
+            ],
+            "independent_local_error_deg": 3.5162543842313275e-06,
+            "independent_world_error_deg": 1.9849478680865842e-05
+          },
+          {
+            "name": "Bip001 Neck",
+            "source": "首",
+            "parent": 7,
+            "bind_local_rotation": [
+              -4.47034836e-08,
+              9.23871994e-07,
+              -0.189666241,
+              0.981848598
+            ],
+            "unity_local": [
+              -0.0594064668,
+              0.088830851,
+              -0.178258047,
+              0.9781636
+            ],
+            "independent_local_error_deg": 3.4848632441659926e-06,
+            "independent_world_error_deg": 1.9671019065447123e-05
+          },
+          {
+            "name": "Bip001 L UpperArm",
+            "source": "左腕",
+            "parent": 18,
+            "bind_local_rotation": [
+              0.131433547,
+              -0.297179788,
+              -0.0125986189,
+              0.945648253
+            ],
+            "unity_local": [
+              0.560964525,
+              -0.506931365,
+              0.0684400499,
+              0.650888145
+            ],
+            "independent_local_error_deg": 7.849048347102098e-06,
+            "independent_world_error_deg": 1.851480347019783e-05
+          },
+          {
+            "name": "Bip001 R UpperArm",
+            "source": "右腕",
+            "parent": 22,
+            "bind_local_rotation": [
+              -0.131430179,
+              0.297181189,
+              -0.0125875473,
+              0.945648432
+            ],
+            "unity_local": [
+              0.48498702,
+              -0.619541705,
+              -0.00201427867,
+              -0.617212772
+            ],
+            "independent_local_error_deg": 9.32886223090862e-06,
+            "independent_world_error_deg": 2.416992538065216e-05
+          },
+          {
+            "name": "Bip001 Head",
+            "source": "頭",
+            "parent": 25,
+            "bind_local_rotation": [
+              2.38418608e-07,
+              2.38418608e-07,
+              0.0482789502,
+              0.998833895
+            ],
+            "unity_local": [
+              0.0277731065,
+              -0.0138974758,
+              0.109098919,
+              0.993545651
+            ],
+            "independent_local_error_deg": 7.361592234801049e-06,
+            "independent_world_error_deg": 8.284687848024182e-06
+          },
+          {
+            "name": "Bip001 R Forearm",
+            "source": "右ひじ",
+            "parent": 21,
+            "bind_local_rotation": [
+              -2.98023259e-08,
+              -4.47034907e-08,
+              0.0401958264,
+              0.99919188
+            ],
+            "unity_local": [
+              -0.647090375,
+              -0.166011512,
+              -0.571355462,
+              0.476725429
+            ],
+            "independent_local_error_deg": 1.4490609301897938e-06,
+            "independent_world_error_deg": 1.698619909256838e-05
+          },
+          {
+            "name": "Bip001 L Forearm",
+            "source": "左ひじ",
+            "parent": 17,
+            "bind_local_rotation": [
+              -2.23517418e-08,
+              0,
+              0.0402154326,
+              0.999190986
+            ],
+            "unity_local": [
+              0.641741633,
+              0.0627864376,
+              -0.49348399,
+              0.583694339
+            ],
+            "independent_local_error_deg": 6.162942686140451e-06,
+            "independent_world_error_deg": 1.2841113443622105e-05
+          },
+          {
+            "name": "Bip001 L Hand",
+            "source": "左手首",
+            "parent": 30,
+            "bind_local_rotation": [
+              -0.62364763,
+              0.0281532407,
+              -0.0225214679,
+              0.780873775
+            ],
+            "unity_local": [
+              -0.574376285,
+              -0.0124096284,
+              -0.073136799,
+              0.815223277
+            ],
+            "independent_local_error_deg": 1.3015076515412004e-05,
+            "independent_world_error_deg": 1.2142658210413787e-05
+          },
+          {
+            "name": "Bip001 R Hand",
+            "source": "右手首",
+            "parent": 51,
+            "bind_local_rotation": [
+              0.62364763,
+              -0.0281532314,
+              -0.0225214362,
+              0.780873716
+            ],
+            "unity_local": [
+              0.476444989,
+              0.0314975791,
+              -0.0359348617,
+              0.877904773
+            ],
+            "independent_local_error_deg": 7.912156597283445e-06,
+            "independent_world_error_deg": 1.6948226426746155e-05
+          }
+        ],
+        "auxiliary": {
+          "name": "+PelvisTwist CF A01",
+          "pelvis_model_increment_gap_deg": 1.241853074421696e-05,
+          "uncontrolled_gap_if_parent_static_deg": 162.81811388654515,
+          "before_local": [
+            0.523874044,
+            0.474920899,
+            -0.474979103,
+            0.523832977
+          ],
+          "after_local": [
+            0.57895714,
+            -0.432112068,
+            -0.558125794,
+            -0.408146441
+          ],
+          "baseline_kind": "counterfactual with the captured pre-write local; not a previous-render-frame observation"
+        }
+      },
+      {
+        "file": "pelvis_fk.FKDance.1.80929203.json",
+        "pose": "FKDance",
+        "stage": 1,
+        "frame": 30,
+        "scope": "FullFK",
+        "frames": 175,
+        "writes": 3850,
+        "written_bones": 22,
+        "restored_bones": 22,
+        "last_frame": 119.52,
+        "max_local_error_deg": 1.4567619643991658e-05,
+        "max_world_error_deg": 2.2275683953733438e-05,
+        "bones": [
+          {
+            "name": "Bip001",
+            "source": "",
+            "parent": 1,
+            "bind_local_rotation": null,
+            "unity_local": [
+              -0.500000477,
+              0.499999583,
+              0.499999583,
+              0.500000477
+            ],
+            "independent_local_error_deg": 6.875487399480393e-06,
+            "independent_world_error_deg": 6.361109362927035e-15
+          },
+          {
+            "name": "+PelvisTwist CF A01",
+            "source": "下半身",
+            "parent": 11,
+            "bind_local_rotation": [
+              0.523879111,
+              0.474916697,
+              -0.474979162,
+              0.523831606
+            ],
+            "unity_local": [
+              0.57895714,
+              -0.432112068,
+              -0.558125794,
+              -0.408146441
+            ],
+            "independent_local_error_deg": 4.267571920064173e-06,
+            "independent_world_error_deg": 7.889759416412003e-06
+          },
+          {
+            "name": "Bip001 Pelvis",
+            "source": "下半身",
+            "parent": 11,
+            "bind_local_rotation": [
+              -0.500000179,
+              0.49999994,
+              0.499999195,
+              0.500000715
+            ],
+            "unity_local": [
+              0.434919417,
+              0.537516117,
+              -0.40325287,
+              0.599423707
+            ],
+            "independent_local_error_deg": 5.066267843074714e-06,
+            "independent_world_error_deg": 8.761752370250807e-06
+          },
+          {
+            "name": "Bip001 R Thigh",
+            "source": "右足",
+            "parent": 10,
+            "bind_local_rotation": [
+              0.00587895466,
+              0.999296069,
+              -0.0231003445,
+              0.0289685857
+            ],
+            "unity_local": [
+              0.00587895419,
+              0.999296069,
+              -0.0231004618,
+              0.0289685968
+            ],
+            "independent_local_error_deg": 9.739986044843257e-06,
+            "independent_world_error_deg": 1.8206894596321133e-05
+          },
+          {
+            "name": "Bip001 Spine",
+            "source": "上半身",
+            "parent": 10,
+            "bind_local_rotation": [
+              2.07126141e-06,
+              1.49011612e-07,
+              0.0503663868,
+              -0.998730779
+            ],
+            "unity_local": [
+              -0.0533965603,
+              -0.0263113044,
+              0.119821772,
+              -0.991009235
+            ],
+            "independent_local_error_deg": 6.483668515023941e-06,
+            "independent_world_error_deg": 6.4471934368431055e-06
+          },
+          {
+            "name": "Bip001 L Thigh",
+            "source": "左足",
+            "parent": 10,
+            "bind_local_rotation": [
+              0.00588707626,
+              0.999296069,
+              0.0230987072,
+              -0.0289684981
+            ],
+            "unity_local": [
+              0.0058871503,
+              0.999296129,
+              0.023098601,
+              -0.0289684944
+            ],
+            "independent_local_error_deg": 8.682808241770201e-06,
+            "independent_world_error_deg": 1.925807856367148e-05
+          },
+          {
+            "name": "Bip001 Spine1",
+            "source": "",
+            "parent": 9,
+            "bind_local_rotation": [
+              -8.94069672e-08,
+              -8.94069672e-08,
+              0.0675628483,
+              0.997714996
+            ],
+            "unity_local": [
+              -1.1920929e-07,
+              -1.04308128e-07,
+              0.0675629675,
+              0.997714996
+            ],
+            "independent_local_error_deg": 9.421621688108511e-06,
+            "independent_world_error_deg": 1.6971301222421068e-05
+          },
+          {
+            "name": "Bip001 R Calf",
+            "source": "右ひざ",
+            "parent": 48,
+            "bind_local_rotation": [
+              2.98023224e-08,
+              -5.96046448e-08,
+              0.042415902,
+              0.999100029
+            ],
+            "unity_local": [
+              0,
+              0,
+              0.0424158163,
+              0.999100029
+            ],
+            "independent_local_error_deg": 1.158472767393555e-05,
+            "independent_world_error_deg": 2.0485822816413743e-05
+          },
+          {
+            "name": "Bip001 L Calf",
+            "source": "左ひざ",
+            "parent": 27,
+            "bind_local_rotation": [
+              2.98023224e-08,
+              -2.98023224e-08,
+              0.0424028039,
+              0.999100626
+            ],
+            "unity_local": [
+              -4.47034765e-08,
+              -1.19209275e-07,
+              0.0424027555,
+              0.999100626
+            ],
+            "independent_local_error_deg": 4.344172179180477e-06,
+            "independent_world_error_deg": 1.2372625425786626e-05
+          },
+          {
+            "name": "Bip001 L Foot",
+            "source": "左足首",
+            "parent": 26,
+            "bind_local_rotation": [
+              0.0366093516,
+              0.0270480216,
+              0.0499244034,
+              -0.997715235
+            ],
+            "unity_local": [
+              0.0366093554,
+              0.0270479843,
+              0.0499244928,
+              -0.997715235
+            ],
+            "independent_local_error_deg": 5.13420418458277e-06,
+            "independent_world_error_deg": 9.6196806449041e-06
+          },
+          {
+            "name": "Bip001 R Foot",
+            "source": "右足首",
+            "parent": 47,
+            "bind_local_rotation": [
+              0.036609143,
+              0.0270455182,
+              -0.0499290824,
+              0.997715116
+            ],
+            "unity_local": [
+              0.0366090648,
+              0.0270453803,
+              -0.0499289408,
+              0.997715116
+            ],
+            "independent_local_error_deg": 8.275315658682635e-06,
+            "independent_world_error_deg": 1.436194570673559e-05
+          },
+          {
+            "name": "Bip001 Spine2",
+            "source": "上半身2",
+            "parent": 8,
+            "bind_local_rotation": [
+              0,
+              -4.76837158e-07,
+              0.124971032,
+              0.99216038
+            ],
+            "unity_local": [
+              -0.0606382564,
+              0.00423851563,
+              0.0507834181,
+              0.99685812
+            ],
+            "independent_local_error_deg": 1.2232830285321767e-05,
+            "independent_world_error_deg": 4.961149293127792e-06
+          },
+          {
+            "name": "Bip001 L Clavicle",
+            "source": "左肩",
+            "parent": 7,
+            "bind_local_rotation": [
+              -0.589803636,
+              -0.114550158,
+              0.794900775,
+              0.0845137909
+            ],
+            "unity_local": [
+              -0.464850456,
+              0.0540982746,
+              0.874427676,
+              0.127920777
+            ],
+            "independent_local_error_deg": 4.727691669641047e-06,
+            "independent_world_error_deg": 1.1471439753320226e-05
+          },
+          {
+            "name": "Bip001 R Clavicle",
+            "source": "右肩",
+            "parent": 7,
+            "bind_local_rotation": [
+              -0.589803874,
+              -0.114547886,
+              -0.794901133,
+              -0.0845121071
+            ],
+            "unity_local": [
+              -0.530707121,
+              -0.132162496,
+              -0.829796195,
+              -0.111001313
+            ],
+            "independent_local_error_deg": 8.638976797278912e-06,
+            "independent_world_error_deg": 1.4538191939476219e-05
+          },
+          {
+            "name": "Bip001 Neck",
+            "source": "首",
+            "parent": 7,
+            "bind_local_rotation": [
+              -4.47034836e-08,
+              9.23871994e-07,
+              -0.189666241,
+              0.981848598
+            ],
+            "unity_local": [
+              -0.0594064817,
+              0.0888309702,
+              -0.178257987,
+              0.9781636
+            ],
+            "independent_local_error_deg": 1.023369038438259e-05,
+            "independent_world_error_deg": 2.2275683953733438e-05
+          },
+          {
+            "name": "Bip001 L UpperArm",
+            "source": "左腕",
+            "parent": 18,
+            "bind_local_rotation": [
+              0.131433547,
+              -0.297179788,
+              -0.0125986189,
+              0.945648253
+            ],
+            "unity_local": [
+              0.560964525,
+              -0.506931305,
+              0.0684401244,
+              0.650888145
+            ],
+            "independent_local_error_deg": 1.3771748492359387e-05,
+            "independent_world_error_deg": 1.2934801726376842e-05
+          },
+          {
+            "name": "Bip001 R UpperArm",
+            "source": "右腕",
+            "parent": 22,
+            "bind_local_rotation": [
+              -0.131430179,
+              0.297181189,
+              -0.0125875473,
+              0.945648432
+            ],
+            "unity_local": [
+              0.484986991,
+              -0.619541824,
+              -0.0020143087,
+              -0.617212772
+            ],
+            "independent_local_error_deg": 9.315014364734367e-06,
+            "independent_world_error_deg": 8.30930681499798e-06
+          },
+          {
+            "name": "Bip001 Head",
+            "source": "頭",
+            "parent": 25,
+            "bind_local_rotation": [
+              2.38418608e-07,
+              2.38418608e-07,
+              0.0482789502,
+              0.998833895
+            ],
+            "unity_local": [
+              0.0277731977,
+              -0.0138975363,
+              0.109098837,
+              0.993545651
+            ],
+            "independent_local_error_deg": 2.842737256710278e-06,
+            "independent_world_error_deg": 6.701851920124117e-06
+          },
+          {
+            "name": "Bip001 R Forearm",
+            "source": "右ひじ",
+            "parent": 21,
+            "bind_local_rotation": [
+              -2.98023259e-08,
+              -4.47034907e-08,
+              0.0401958264,
+              0.99919188
+            ],
+            "unity_local": [
+              -0.647090256,
+              -0.166011468,
+              -0.571355581,
+              0.476725519
+            ],
+            "independent_local_error_deg": 1.4567619643991658e-05,
+            "independent_world_error_deg": 8.19745217923109e-06
+          },
+          {
+            "name": "Bip001 L Forearm",
+            "source": "左ひじ",
+            "parent": 17,
+            "bind_local_rotation": [
+              -2.23517418e-08,
+              0,
+              0.0402154326,
+              0.999190986
+            ],
+            "unity_local": [
+              0.641741693,
+              0.0627862513,
+              -0.493483931,
+              0.583694339
+            ],
+            "independent_local_error_deg": 8.508492704197723e-06,
+            "independent_world_error_deg": 1.1369247906171397e-05
+          },
+          {
+            "name": "Bip001 L Hand",
+            "source": "左手首",
+            "parent": 30,
+            "bind_local_rotation": [
+              -0.62364763,
+              0.0281532407,
+              -0.0225214679,
+              0.780873775
+            ],
+            "unity_local": [
+              -0.574376285,
+              -0.0124095678,
+              -0.0731368661,
+              0.815223277
+            ],
+            "independent_local_error_deg": 3.5286032096068e-06,
+            "independent_world_error_deg": 1.9552900799916987e-05
+          },
+          {
+            "name": "Bip001 R Hand",
+            "source": "右手首",
+            "parent": 51,
+            "bind_local_rotation": [
+              0.62364763,
+              -0.0281532314,
+              -0.0225214362,
+              0.780873716
+            ],
+            "unity_local": [
+              0.47644487,
+              0.0314974859,
+              -0.0359348319,
+              0.877904832
+            ],
+            "independent_local_error_deg": 1.2471009643629843e-05,
+            "independent_world_error_deg": 2.2129604950189576e-05
+          }
+        ],
+        "auxiliary": {
+          "name": "+PelvisTwist CF A01",
+          "pelvis_model_increment_gap_deg": 1.241853074421696e-05,
+          "uncontrolled_gap_if_parent_static_deg": 162.81873013103285,
+          "before_local": [
+            0.523869336,
+            0.474925399,
+            -0.474978685,
+            0.52383399
+          ],
+          "after_local": [
+            0.57895714,
+            -0.432112068,
+            -0.558125794,
+            -0.408146441
+          ],
+          "baseline_kind": "counterfactual with the captured pre-write local; not a previous-render-frame observation"
+        }
+      },
+      {
+        "file": "pelvis_fk.FKDance.2.80929203.json",
+        "pose": "FKDance",
+        "stage": 2,
+        "frame": 120,
+        "scope": "FullFK",
+        "frames": 1087,
+        "writes": 23914,
+        "written_bones": 22,
+        "restored_bones": 22,
+        "last_frame": 662.79,
+        "max_local_error_deg": 1.232582666216111e-05,
+        "max_world_error_deg": 2.6991976298504513e-05,
+        "bones": [
+          {
+            "name": "Bip001",
+            "source": "",
+            "parent": 1,
+            "bind_local_rotation": null,
+            "unity_local": [
+              -0.500000477,
+              0.499999583,
+              0.499999583,
+              0.500000477
+            ],
+            "independent_local_error_deg": 6.875487399480393e-06,
+            "independent_world_error_deg": 6.361109362927035e-15
+          },
+          {
+            "name": "+PelvisTwist CF A01",
+            "source": "下半身",
+            "parent": 11,
+            "bind_local_rotation": [
+              0.523879111,
+              0.474916697,
+              -0.474979162,
+              0.523831606
+            ],
+            "unity_local": [
+              0.530849278,
+              -0.428869724,
+              -0.622753859,
+              -0.382684648
+            ],
+            "independent_local_error_deg": 7.99478388836423e-06,
+            "independent_world_error_deg": 1.0073239895489285e-05
+          },
+          {
+            "name": "Bip001 Pelvis",
+            "source": "下半身",
+            "parent": 11,
+            "bind_local_rotation": [
+              -0.500000179,
+              0.49999994,
+              0.499999195,
+              0.500000715
+            ],
+            "unity_local": [
+              0.412651449,
+              0.603312254,
+              -0.402363479,
+              0.55121398
+            ],
+            "independent_local_error_deg": 1.232582666216111e-05,
+            "independent_world_error_deg": 1.45690601663031e-05
+          },
+          {
+            "name": "Bip001 R Thigh",
+            "source": "右足",
+            "parent": 10,
+            "bind_local_rotation": [
+              0.00587895466,
+              0.999296069,
+              -0.0231003445,
+              0.0289685857
+            ],
+            "unity_local": [
+              0.00587889459,
+              0.999296069,
+              -0.0231002979,
+              0.0289685372
+            ],
+            "independent_local_error_deg": 4.365035461421241e-06,
+            "independent_world_error_deg": 1.2199186820357805e-05
+          },
+          {
+            "name": "Bip001 Spine",
+            "source": "上半身",
+            "parent": 10,
+            "bind_local_rotation": [
+              2.07126141e-06,
+              1.49011612e-07,
+              0.0503663868,
+              -0.998730779
+            ],
+            "unity_local": [
+              -0.0205913484,
+              -0.088108778,
+              -0.0709109306,
+              -0.993370295
+            ],
+            "independent_local_error_deg": 8.635160305800043e-06,
+            "independent_world_error_deg": 1.0234291378304262e-05
+          },
+          {
+            "name": "Bip001 L Thigh",
+            "source": "左足",
+            "parent": 10,
+            "bind_local_rotation": [
+              0.00588707626,
+              0.999296069,
+              0.0230987072,
+              -0.0289684981
+            ],
+            "unity_local": [
+              0.00588703062,
+              0.999296069,
+              0.0230987947,
+              -0.0289685391
+            ],
+            "independent_local_error_deg": 1.310132718666909e-06,
+            "independent_world_error_deg": 1.631491109226979e-05
+          },
+          {
+            "name": "Bip001 Spine1",
+            "source": "",
+            "parent": 9,
+            "bind_local_rotation": [
+              -8.94069672e-08,
+              -8.94069672e-08,
+              0.0675628483,
+              0.997714996
+            ],
+            "unity_local": [
+              -8.9406953e-08,
+              -1.04308114e-07,
+              0.0675628111,
+              0.997714996
+            ],
+            "independent_local_error_deg": 6.9626732195270415e-06,
+            "independent_world_error_deg": 1.066108498445828e-05
+          },
+          {
+            "name": "Bip001 R Calf",
+            "source": "右ひざ",
+            "parent": 48,
+            "bind_local_rotation": [
+              2.98023224e-08,
+              -5.96046448e-08,
+              0.042415902,
+              0.999100029
+            ],
+            "unity_local": [
+              5.96046377e-08,
+              -1.19209275e-07,
+              0.0424159281,
+              0.999100029
+            ],
+            "independent_local_error_deg": 9.199245494818535e-06,
+            "independent_world_error_deg": 4.3125439317852665e-06
+          },
+          {
+            "name": "Bip001 L Calf",
+            "source": "左ひざ",
+            "parent": 27,
+            "bind_local_rotation": [
+              2.98023224e-08,
+              -2.98023224e-08,
+              0.0424028039,
+              0.999100626
+            ],
+            "unity_local": [
+              5.96046377e-08,
+              -1.63912759e-07,
+              0.0424028821,
+              0.999100566
+            ],
+            "independent_local_error_deg": 4.796574971050384e-06,
+            "independent_world_error_deg": 2.201862434099263e-05
+          },
+          {
+            "name": "Bip001 L Foot",
+            "source": "左足首",
+            "parent": 26,
+            "bind_local_rotation": [
+              0.0366093516,
+              0.0270480216,
+              0.0499244034,
+              -0.997715235
+            ],
+            "unity_local": [
+              0.0366092995,
+              0.0270478968,
+              0.049924463,
+              -0.997715235
+            ],
+            "independent_local_error_deg": 8.952346135857203e-06,
+            "independent_world_error_deg": 7.513439257767649e-06
+          },
+          {
+            "name": "Bip001 R Foot",
+            "source": "右足首",
+            "parent": 47,
+            "bind_local_rotation": [
+              0.036609143,
+              0.0270455182,
+              -0.0499290824,
+              0.997715116
+            ],
+            "unity_local": [
+              0.036609184,
+              0.0270454865,
+              -0.0499290638,
+              0.997715116
+            ],
+            "independent_local_error_deg": 5.180192169742343e-06,
+            "independent_world_error_deg": 1.2225125198916354e-05
+          },
+          {
+            "name": "Bip001 Spine2",
+            "source": "上半身2",
+            "parent": 8,
+            "bind_local_rotation": [
+              0,
+              -4.76837158e-07,
+              0.124971032,
+              0.99216038
+            ],
+            "unity_local": [
+              -0.170806557,
+              0.00339350104,
+              -0.00614804029,
+              0.98527962
+            ],
+            "independent_local_error_deg": 9.224787947235096e-06,
+            "independent_world_error_deg": 2.0442494839174982e-05
+          },
+          {
+            "name": "Bip001 L Clavicle",
+            "source": "左肩",
+            "parent": 7,
+            "bind_local_rotation": [
+              -0.589803636,
+              -0.114550158,
+              0.794900775,
+              0.0845137909
+            ],
+            "unity_local": [
+              -0.571834326,
+              -0.326395273,
+              0.747279227,
+              0.0896962062
+            ],
+            "independent_local_error_deg": 9.142361598086822e-06,
+            "independent_world_error_deg": 2.5566316027252706e-05
+          },
+          {
+            "name": "Bip001 R Clavicle",
+            "source": "右肩",
+            "parent": 7,
+            "bind_local_rotation": [
+              -0.589803874,
+              -0.114547886,
+              -0.794901133,
+              -0.0845121071
+            ],
+            "unity_local": [
+              -0.506152272,
+              -0.277711093,
+              -0.816424072,
+              -0.0117562944
+            ],
+            "independent_local_error_deg": 4.479759232412288e-06,
+            "independent_world_error_deg": 1.9724390749175763e-05
+          },
+          {
+            "name": "Bip001 Neck",
+            "source": "首",
+            "parent": 7,
+            "bind_local_rotation": [
+              -4.47034836e-08,
+              9.23871994e-07,
+              -0.189666241,
+              0.981848598
+            ],
+            "unity_local": [
+              0.0123287123,
+              -0.0814189166,
+              -0.190591305,
+              0.978209555
+            ],
+            "independent_local_error_deg": 6.379433859207615e-06,
+            "independent_world_error_deg": 2.658389217272206e-05
+          },
+          {
+            "name": "Bip001 L UpperArm",
+            "source": "左腕",
+            "parent": 18,
+            "bind_local_rotation": [
+              0.131433547,
+              -0.297179788,
+              -0.0125986189,
+              0.945648253
+            ],
+            "unity_local": [
+              0.235517487,
+              -0.327479362,
+              0.0889885798,
+              0.91069746
+            ],
+            "independent_local_error_deg": 9.636904499369008e-06,
+            "independent_world_error_deg": 1.2637825192467991e-05
+          },
+          {
+            "name": "Bip001 R UpperArm",
+            "source": "右腕",
+            "parent": 22,
+            "bind_local_rotation": [
+              -0.131430179,
+              0.297181189,
+              -0.0125875473,
+              0.945648432
+            ],
+            "unity_local": [
+              0.847909987,
+              -0.255522639,
+              -0.0183289777,
+              -0.464134604
+            ],
+            "independent_local_error_deg": 1.0143598178410958e-05,
+            "independent_world_error_deg": 8.63962924133683e-06
+          },
+          {
+            "name": "Bip001 Head",
+            "source": "頭",
+            "parent": 25,
+            "bind_local_rotation": [
+              2.38418608e-07,
+              2.38418608e-07,
+              0.0482789502,
+              0.998833895
+            ],
+            "unity_local": [
+              0.0189042911,
+              -0.117116153,
+              -0.0616515651,
+              0.991022468
+            ],
+            "independent_local_error_deg": 1.1382883259099866e-05,
+            "independent_world_error_deg": 2.6991976298504513e-05
+          },
+          {
+            "name": "Bip001 R Forearm",
+            "source": "右ひじ",
+            "parent": 21,
+            "bind_local_rotation": [
+              -2.98023259e-08,
+              -4.47034907e-08,
+              0.0401958264,
+              0.99919188
+            ],
+            "unity_local": [
+              -0.386836052,
+              -0.112580761,
+              -0.610690415,
+              0.681718946
+            ],
+            "independent_local_error_deg": 1.134397024725876e-05,
+            "independent_world_error_deg": 8.607346927904772e-06
+          },
+          {
+            "name": "Bip001 L Forearm",
+            "source": "左ひじ",
+            "parent": 17,
+            "bind_local_rotation": [
+              -2.23517418e-08,
+              0,
+              0.0402154326,
+              0.999190986
+            ],
+            "unity_local": [
+              0.583375752,
+              0.252520144,
+              0.426051378,
+              0.643728673
+            ],
+            "independent_local_error_deg": 5.24038042006635e-06,
+            "independent_world_error_deg": 4.879871908377988e-06
+          },
+          {
+            "name": "Bip001 L Hand",
+            "source": "左手首",
+            "parent": 30,
+            "bind_local_rotation": [
+              -0.62364763,
+              0.0281532407,
+              -0.0225214679,
+              0.780873775
+            ],
+            "unity_local": [
+              -0.492496461,
+              -0.343650639,
+              -0.384650528,
+              0.700996101
+            ],
+            "independent_local_error_deg": 9.756681099600623e-06,
+            "independent_world_error_deg": 8.276349407467835e-06
+          },
+          {
+            "name": "Bip001 R Hand",
+            "source": "右手首",
+            "parent": 51,
+            "bind_local_rotation": [
+              0.62364763,
+              -0.0281532314,
+              -0.0225214362,
+              0.780873716
+            ],
+            "unity_local": [
+              -0.429724544,
+              -0.247860461,
+              0.427465886,
+              -0.755761147
+            ],
+            "independent_local_error_deg": 9.304621128598602e-06,
+            "independent_world_error_deg": 2.271524129031651e-05
+          }
+        ],
+        "auxiliary": {
+          "name": "+PelvisTwist CF A01",
+          "pelvis_model_increment_gap_deg": 1.704305173075402e-05,
+          "uncontrolled_gap_if_parent_static_deg": 160.45389261392523,
+          "before_local": [
+            0.523869336,
+            0.474925399,
+            -0.474978685,
+            0.52383399
+          ],
+          "after_local": [
+            0.530849278,
+            -0.428869724,
+            -0.622753859,
+            -0.382684648
+          ],
+          "baseline_kind": "counterfactual with the captured pre-write local; not a previous-render-frame observation"
+        }
+      }
+    ]
+  },
+  "visual_validation": "USER_FEEDBACK_REQUIRED",
+  "root_world_oracle": "ONE_REFERENCE_BONE_PER_STAGE",
+  "limitations": "Quaternion composition verified; model axis calibration and visual improvement are separate checks."
+}

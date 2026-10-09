@@ -32,4 +32,5 @@ bool WriteBoneRotation(uintptr_t object,const Quaternion& value);
 bool InitializeBoneGeometry(GenshinNativeRuntime& runtime,std::ostream& report);
 bool ReadBonePosition(uintptr_t object,uintptr_t expectedNative,Vector3& out,bool world);
 bool ReadBoneWorldRotation(uintptr_t object,uintptr_t expectedNative,Quaternion& out);
+bool ReadBoneScale(uintptr_t object,uintptr_t expectedNative,Vector3& out);
 }

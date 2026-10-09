@@ -2,6 +2,7 @@
 #include "RigProbe.h"
 #include "BoneWriteProbe.h"
 #include "MotionPlayback.h"
+#include "UiBridge.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -290,57 +291,114 @@ bool DispatchJob(HANDLE stop,HMODULE module,Window window,std::ostream& report,b
         << " Unity_main_tid=" << job.mainThread << " step=" << job.step << " SEH=0x" << std::hex << job.fault << std::dec << '\n';
     return job.complete && !job.fault && state.load()==3;
 }
-bool RunMotionSession(GenshinNativeRuntime& runtime,HANDLE stop,HMODULE module,Window window,std::ostream& report,const std::filesystem::path& directory) {
+std::string Utf8(const wchar_t* text,int length);
+bool RunMotionSession(GenshinNativeRuntime& runtime,HANDLE stop,HMODULE module,Window window,std::ostream& report,const std::filesystem::path& directory,bool& rescan,std::wstring& requestedName) {
+    rescan=false;
     if (!MotionRigArmed()) { report << "motion_session=NOT_ARMED; reason=Actor_or_rig_gate\n"; return false; }
     // 初始化只读 reference；失败后仍走统一的恢复 / roots 清理，禁止退回当前动画基准。
-    bool passed=InitializeMotionReference(runtime,job.items[1].meshClass,job.mesh,report);
-    if (passed) {job.mode=9;passed=DispatchJob(stop,module,window,report,true);ReportMotion(report);}
+    bool passed=ConfigureMotionAB(directory,report)&&InitializeMotionReference(runtime,job.items[1].meshClass,job.mesh,report);
+    if (passed) {job.mode=9;passed=DispatchJob(stop,module,window,report,true);ReportMotion(report);ExportMotionReferences(directory,report);}
     if (passed) passed=InstallAnimationReturnProbe(runtime,stop,report);
+    if (passed) passed=ConfigureMotionAB(directory,report);
     report << "phase=" << (passed?"MOTION_COMMANDS_READY":"MOTION_REFERENCE_BLOCKED") << "; NUMPAD1=load_or_reload_and_play; NUMPAD2=stop_and_restore; NUMPAD3=finish_session; NumLock=ON; playback_control=MANUAL\n";
     report << "motion_path_file=motion_path.txt; command_flags=motion_play.flag,motion_stop.flag,motion_exit.flag\n"; report.flush();
+    report << "AB_controls=NUMPAD6_Legacy; NUMPAD7_Basis; NUMPAD8_cycle_Identity_X_Y_Z_Frame0_Frame30_Frame120; selection_requires_STOPPED; start=NUMPAD1; restore=NUMPAD2\n";report.flush();
+    if (ui::Enabled()) ui::State(passed?L"骨架已就绪。选择 VMD 后载入，再点击播放。":L"静态绑定姿态校验未通过，禁止播放。",passed,false,false,!passed);
     auto consume=[&](const wchar_t* name) {
         const auto path=directory/name;
         if (GetFileAttributesW(path.c_str())==INVALID_FILE_ATTRIBUTES) return false;
         return DeleteFileW(path.c_str())!=0;
     };
     bool previousPlay=false,previousStop=false,previousExit=false;
+    bool previousAB[3]{};
+    uint64_t nextProgress=0;
+    unsigned previousStage=UINT_MAX;
     try {
         while (passed && WaitForSingleObject(stop,25)!=WAIT_OBJECT_0) {
             DWORD foreground=0; GetWindowThreadProcessId(GetForegroundWindow(),&foreground);
-            const auto inGame=foreground==GetCurrentProcessId();
+            const auto inGame=foreground==GetCurrentProcessId()&&GetForegroundWindow()==window.hwnd;
+            for(unsigned i=0;i<3;++i) {
+                const bool down=inGame&&(GetAsyncKeyState(VK_NUMPAD6+i)&0x8000);
+                if(down&&!previousAB[i]) {
+                    const bool selected=SelectMotionAB(6+i,report);
+                    if(ui::Enabled())ui::State(selected?L"A/B 测试已选择。详见日志；点击播放或小键盘 1 开始。":L"请先停止并恢复，再选择 A/B 测试。",true,ui::Read().loaded,MotionStatus()==1);
+                }
+                previousAB[i]=down;
+            }
             const bool play=inGame&&(GetAsyncKeyState(VK_NUMPAD1)&0x8000),stopKey=inGame&&(GetAsyncKeyState(VK_NUMPAD2)&0x8000),finish=inGame&&(GetAsyncKeyState(VK_NUMPAD3)&0x8000);
-            const bool playCommand=(play&&!previousPlay)||consume(L"motion_play.flag"),stopCommand=(stopKey&&!previousStop)||consume(L"motion_stop.flag"),exitCommand=(finish&&!previousExit)||consume(L"motion_exit.flag");
+            bool playCommand=(play&&!previousPlay)||consume(L"motion_play.flag"),stopCommand=(stopKey&&!previousStop)||consume(L"motion_stop.flag"),exitCommand=(finish&&!previousExit)||consume(L"motion_exit.flag");
+            bool loadOnly=false,unload=false,startOnly=false;std::wstring selectedPath;
+            ui::Command command{ui::CommandKind::Refresh};
+            if (ui::Enabled()&&ui::Take(command)) {
+                if (command.kind==ui::CommandKind::Refresh||command.kind==ui::CommandKind::BindActor||command.kind==ui::CommandKind::ReleaseRig) {
+                    if (MotionStatus()==1) {ui::State(L"请先停止动作，再切换或刷新骨架。",true,true,true);continue;}
+                    if (command.kind==ui::CommandKind::BindActor&&!ui::ValidateSelection(command)) {ui::State(L"骨架列表已更新或目标不可绑定，请重新选择。",true,ui::Read().loaded,false);continue;}
+                    if (command.kind==ui::CommandKind::BindActor) requestedName=command.text;
+                    if (command.kind==ui::CommandKind::ReleaseRig) requestedName.clear();
+                    rescan=true;break;
+                }
+                playCommand|=command.kind==ui::CommandKind::Play;
+                startOnly=command.kind==ui::CommandKind::Play;
+                stopCommand|=command.kind==ui::CommandKind::Stop;
+                loadOnly=command.kind==ui::CommandKind::LoadFile;
+                selectedPath=loadOnly?command.text:L"";
+                unload=command.kind==ui::CommandKind::Unload;
+            }
+            if (stopCommand) {playCommand=false;loadOnly=false;startOnly=false;unload=false;}
             previousPlay=play; previousStop=stopKey; previousExit=finish;
-            if (exitCommand) break;
-            if (stopCommand || MotionStatus()==2 || MotionStatus()==3 || playCommand) {
+            if (exitCommand) {if (ui::Enabled()) {rescan=true;requestedName.clear();}break;}
+            if (stopCommand || MotionStatus()==2 || MotionStatus()==3 || playCommand || loadOnly || unload) {
                 const auto prior=MotionStatus();
                 DisableMotionWrites(); job.mode=8;
                 passed=DispatchJob(stop,module,window,report,false);
                 ReportMotion(report);
+                ReportMotionAB(report);
                 report << "motion_stop=" << (passed?"RESTORED":"FAILED") << " prior_status=" << prior << '\n'; report.flush();
+                if (ui::Enabled()) ui::State(passed?L"动作已停止，现场姿态已恢复。":L"恢复校验失败，请查看日志。",passed,ui::Read().loaded,false,!passed);
                 if (prior==3) { passed=false; break; }
             }
-            if (playCommand && passed) {
-                std::ifstream pathFile(directory/L"motion_path.txt",std::ios::binary);
-                std::string text; if (pathFile) std::getline(pathFile,text);
+            if (unload&&passed) {passed=UnloadMotionClip();if (ui::Enabled()) ui::State(passed?L"动作已载出。骨架保持绑定。":L"动作载出失败。",passed,false,false,!passed);}
+            if (((playCommand&&!startOnly)||loadOnly) && passed) {
+                if(!ConfigureMotionAB(directory,report))continue;
+                std::string text;
+                if (loadOnly) text=Utf8(selectedPath.c_str(),int(selectedPath.size()));
+                else {std::ifstream pathFile(directory/L"motion_path.txt",std::ios::binary);if (pathFile) std::getline(pathFile,text);}
                 if (!text.empty()&&text.back()=='\r') text.pop_back();
                 if (text.starts_with("\xEF\xBB\xBF")) text.erase(0,3);
                 const auto size=text.size()<=32767?MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text.data(),int(text.size()),nullptr,0):0;
-                if (!size) { report << "motion_load=REJECTED; reason=MOTION_PATH_EMPTY_OR_INVALID_UTF8\n"; report.flush(); continue; }
+                if (!size) { report << "motion_load=REJECTED; reason=MOTION_PATH_EMPTY_OR_INVALID_UTF8\n"; report.flush();if (ui::Enabled()) ui::State(L"请选择有效的动作文件路径。",true,ui::Read().loaded,false);continue; }
                 std::wstring path(size,L'\0'); MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text.data(),int(text.size()),path.data(),size);
                 report << "motion_source=" << text << '\n';
-                if (!LoadMotionClip(path,report,stop)) continue;
+                UnloadMotionClip();
+                if (!LoadMotionClip(path,report,stop)) {if (ui::Enabled()) ui::State(L"动作载入被拒绝。请确认文件含角色骨骼动作，并查看日志。",true,false,false);continue;}
+                if (loadOnly) {
+                    std::ofstream pathFile(directory/L"motion_path.txt",std::ios::binary);pathFile << text;pathFile.flush();
+                    if (ui::Enabled()) ui::State(L"动作已载入。点击播放开始。",true,true,false);
+                }
+            }
+            if (playCommand&&passed) {
+                if (startOnly&&!ui::Read().loaded) {ui::State(L"请先载入动作文件。",true,false,false);continue;}
+                if(!ConfigureMotionAB(directory,report))continue;
                 job.mode=7; passed=DispatchJob(stop,module,window,report,true);
                 report << "motion_start=" << (passed?"PLAYING":"FAILED") << '\n'; report.flush();
+                if (ui::Enabled()) ui::State(passed?L"正在播放。点击停止可恢复现场姿态。":L"播放校验失败，禁止写入。",passed,ui::Read().loaded,passed,!passed);
+            }
+            if (ui::Enabled()&&GetTickCount64()>=nextProgress) {ui::Progress(MotionPosition());nextProgress=GetTickCount64()+200;}
+            const auto currentStage=MotionABStage();
+            if(MotionStatus()==1&&currentStage!=previousStage) {
+                previousStage=currentStage;const auto text=ReportMotionABStage(currentStage,report);
+                if(!text.empty()&&ui::Enabled())ui::State(text,true,true,true);
             }
         }
     } catch (const std::exception& error) { passed=false; report << "motion_worker_error=" << error.what() << '\n'; }
     DisableMotionWrites();
-    if (MotionRigArmed()) { job.mode=8; passed=DispatchJob(stop,module,window,report,false)&&passed; ReportMotion(report); }
+    if (MotionRigArmed()) { job.mode=8; passed=DispatchJob(stop,module,window,report,false)&&passed; ReportMotion(report); ReportMotionAB(report); }
     passed=RemoveAnimationReturnProbe(report)&&passed;
     if (MotionRigArmed()) { job.mode=6; passed=DispatchJob(stop,module,window,report,false)&&passed; }
     if (BoneWriteArmed()) { job.mode=4; passed=DispatchJob(stop,module,window,report,false)&&passed; }
     ReportMotion(report); ReportBoneWrite(report); ReportAnimationReturnProbe(report);
+    UnloadMotionClip();
+    if (ui::Enabled()) {ui::Bound({},0);ui::State(passed?L"骨架已释放，等待刷新或重新绑定。":L"动作会话校验失败。已尝试恢复与清理，请重启测试游戏。",false,false,false,!passed);}
     report << "motion_session=" << (passed?"STOPPED_AND_RELEASED":"FAILED") << "; visual_confirmation=USER_OBSERVATION_REQUIRED\n"; report.flush();
     return passed;
 }
@@ -517,9 +575,9 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
     if (!dispatchMessage || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
         reinterpret_cast<LPCWSTR>(&Dispatch), &module)) return false;
     const auto marker = directory / L"scene_ready.flag";
-    const bool autoScene=GetFileAttributesW((directory/L"auto_scene.flag").c_str())!=INVALID_FILE_ATTRIBUTES &&
+    const bool autoScene=ui::Enabled()||(GetFileAttributesW((directory/L"auto_scene.flag").c_str())!=INVALID_FILE_ATTRIBUTES &&
         GetFileAttributesW((directory/L"motion_mode.flag").c_str())!=INVALID_FILE_ATTRIBUTES &&
-        GetFileAttributesW((directory/L"target_actor_name.txt").c_str())!=INVALID_FILE_ATTRIBUTES;
+        GetFileAttributesW((directory/L"target_actor_name.txt").c_str())!=INVALID_FILE_ATTRIBUTES);
     report << (autoScene?"phase=AUTO_SCENE_DISCOVERY; gate=unique_active_configured_Actor_rig\n":"phase=WAITING_PLAYABLE_SCENE; trigger=foreground_NUMPAD0_or_scene_ready.flag; NumLock=ON\n");
     report.flush();
     const auto sceneDeadline = GetTickCount64() + 15 * 60 * 1000;
@@ -531,7 +589,7 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
             (foreground == GetCurrentProcessId() && (GetAsyncKeyState(VK_NUMPAD0) & 0x8000))) { confirmed = true; break; }
     }
     if (!confirmed) { report << "blocker=scene entry not confirmed or cancelled\n"; return false; }
-    if (GetFileAttributesW((directory/L"motion_mode.flag").c_str())!=INVALID_FILE_ATTRIBUTES) {
+    if (ui::Enabled()||GetFileAttributesW((directory/L"motion_mode.flag").c_str())!=INVALID_FILE_ATTRIBUTES) {
         ConfigureMotionMode(); report << "write_experiment=DYNAMIC_VMD_FK_USER_REQUESTED\n";
         if (!InitializeBoneGeometry(runtime,report)) {report << "blocker=reference pose requires verified world rotation getters\n";return false;}
     }
@@ -546,15 +604,35 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
     }
     std::ifstream targetFile(directory/L"target_actor_name.txt",std::ios::binary);
     std::string targetName;
+    std::wstring requestedName;
     if (targetFile) std::getline(targetFile,targetName);
     if (!targetName.empty() && targetName.size()<128) {
         const auto size=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,targetName.data(),int(targetName.size()),nullptr,0);
         std::wstring actorName(size,L'\0');
-        if (size && MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,targetName.data(),int(targetName.size()),actorName.data(),size)) SetRigWriteTarget(actorName);
+        if (size && MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,targetName.data(),int(targetName.size()),actorName.data(),size)) {requestedName=actorName;SetRigWriteTarget(actorName);}
         report << "requested_actor_name=" << targetName << '\n';
     }
     report << (autoScene?"scene_entry=AUTOMATIC_READONLY_DISCOVERY; character_writes=NONE\n":"scene_entry=USER_CONFIRMED; character_writes=NONE\n");
-    for (unsigned attempt = 0; attempt < 120; ++attempt) {
+    if (ui::Enabled()) ui::State(L"自动等待角色场景。可从列表选择当前激活的骨架。",false,false,false);
+    for (unsigned attempt = 0; attempt < 120||ui::Enabled(); ++attempt) {
+        // 每轮 discovery 有界。UI 超时后等待手动刷新，不持续扫描；新选择仍由下一快照重新核验。
+        if (ui::Enabled()) {
+            ui::Command command{ui::CommandKind::Refresh};
+            bool received=false;
+            if (attempt>=120) {
+                ui::State(L"场景等待超时。进入角色场景后点击刷新。",false,false,false);
+                while (!(received=ui::Take(command))) if (WaitForSingleObject(stop,100)==WAIT_OBJECT_0) return false;
+                attempt=0;
+            } else received=ui::Take(command);
+            if (received) {
+                if (command.kind==ui::CommandKind::BindActor) {
+                    if (!ui::ValidateSelection(command)) {ui::State(L"列表已更新或骨架不可绑定，请重新选择。",false,false,false);continue;}
+                    requestedName=command.text;SetRigWriteTarget(requestedName);attempt=0;
+                    ui::State(L"正在重新采集并校验所选骨架。",false,false,false);
+                } else if (command.kind==ui::CommandKind::ReleaseRig) {requestedName.clear();SetRigWriteTarget(requestedName);}
+                else if (command.kind!=ui::CommandKind::Refresh) {ui::State(L"请先绑定可控角色骨架，再载入动作。",false,false,false);}
+            }
+        }
         report << "\n[scene snapshot " << attempt + 1 << "] tick=" << GetTickCount64() << '\n';
         // 清空上次历史观测，只保留已经核验的 native class/descriptor 身份。
         for (auto& item : job.items) {
@@ -562,7 +640,7 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
             const auto id = item.metadataId;
             item = Item{}; item.klass = klass; item.descriptor = descriptor; item.metadataId = id;
         }
-        job.complete = false; job.fault = 0; job.step = 0; job.runtimeThread = 0;
+        job.complete = false; job.fault = 0; job.step = 0; job.mode=0; job.runtimeThread = 0;
         if (WaitForSingleObject(stop, 0) == WAIT_OBJECT_0) return false;
         if (Read(job.context.mainThreadSlot, job.mainThread) && job.mainThread) {
             Window window{job.mainThread, nullptr};
@@ -632,6 +710,7 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
                     return false;
                 }
                 if (autoScene && !MotionRigArmed()) {
+                    if (ui::Enabled()) {ExportRigProbe(directory,report);ui::State(requestedName.empty()?L"选择一个可绑定骨架，然后点击绑定。":L"等待所选角色激活及骨架校验。",false,false,false);}
                     report << "auto_scene=WAITING_UNIQUE_ACTIVE_TARGET_RIG; writes=NONE\n";report.flush();
                     if (WaitForSingleObject(stop,5000)==WAIT_OBJECT_0) return false;
                     continue;
@@ -654,7 +733,14 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
                         report << "bones_export=genshin_poser_bones.txt; slots=" << item.bonesLength << '\n';
                         if (!ExportRigProbe(directory, report)) return false;
                     }
-                    return IsMotionMode()?RunMotionSession(runtime,stop,module,window,report,directory):RunBoneExperiment(runtime,stop,module,window,report,directory);
+                    if (IsMotionMode()) {
+                        if (ui::Enabled()) ui::Bound(requestedName,unsigned(item.bonesLength));
+                        bool rescan=false;
+                        const auto passed=RunMotionSession(runtime,stop,module,window,report,directory,rescan,requestedName);
+                        if (ui::Enabled()&&passed&&rescan) {SetRigWriteTarget(requestedName);attempt=0;continue;}
+                        return passed;
+                    }
+                    return RunBoneExperiment(runtime,stop,module,window,report,directory);
                 }
             }
         }

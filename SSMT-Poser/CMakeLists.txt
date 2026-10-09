@@ -6,6 +6,7 @@ if(NOT WIN32 OR NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
 endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+add_compile_definitions(UNICODE _UNICODE)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 # 复用工作区已有 MinHook；独立编译进探针，不加载 Player Tweaks 插件。
@@ -14,8 +15,8 @@ if(NOT TARGET minhook)
         "${CMAKE_CURRENT_BINARY_DIR}/PoserMinHook")
 endif()
 
-add_library(SSMT-Poser SHARED Plugin.cpp RuntimeProbe.cpp GenshinNativeRuntime.cpp LiveUnityProbe.cpp RigProbe.cpp BoneWriteProbe.cpp VmdMotion.cpp MotionPlayback.cpp)
-target_link_libraries(SSMT-Poser PRIVATE bcrypt user32 minhook)
+add_library(SSMT-Poser SHARED Plugin.cpp RuntimeProbe.cpp GenshinNativeRuntime.cpp LiveUnityProbe.cpp RigProbe.cpp BoneWriteProbe.cpp VmdMotion.cpp MotionPlayback.cpp UiBridge.cpp PoserUi.cpp)
+target_link_libraries(SSMT-Poser PRIVATE bcrypt user32 minhook comctl32 dwmapi gdi32 shell32 ole32 uuid)
 target_compile_options(SSMT-Poser PRIVATE /utf-8 /W4 /EHsc)
 target_compile_definitions(SSMT-Poser PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 set(SSMT_POSER_ARTIFACT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../dist/$<CONFIG>"
@@ -25,10 +26,20 @@ add_custom_command(TARGET SSMT-Poser POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:SSMT-Poser>"
         "${SSMT_POSER_ARTIFACT_DIR}/SSMT-Poser.dll")
 
-add_executable(PoserProbeTests Tests/ProbeTests.cpp RuntimeProbe.cpp GenshinNativeRuntime.cpp LiveUnityProbe.cpp RigProbe.cpp BoneWriteProbe.cpp VmdMotion.cpp MotionPlayback.cpp)
+add_executable(PoserProbeTests Tests/ProbeTests.cpp Tests/BasisTests.cpp Tests/AvatarTests.cpp RuntimeProbe.cpp GenshinNativeRuntime.cpp LiveUnityProbe.cpp RigProbe.cpp BoneWriteProbe.cpp VmdMotion.cpp MotionPlayback.cpp UiBridge.cpp)
 target_link_libraries(PoserProbeTests PRIVATE bcrypt user32 minhook)
 target_compile_options(PoserProbeTests PRIVATE /utf-8 /W4 /EHsc)
 target_compile_definitions(PoserProbeTests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_include_directories(PoserProbeTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 enable_testing()
 add_test(NAME PoserProbeTests COMMAND PoserProbeTests "$<TARGET_FILE:SSMT-Poser>")
+
+add_executable(PoserUiTests Tests/UiTests.cpp UiBridge.cpp PoserUi.cpp)
+target_link_libraries(PoserUiTests PRIVATE user32 comctl32 dwmapi gdi32 shell32 ole32 uuid gdiplus)
+target_compile_options(PoserUiTests PRIVATE /utf-8 /W4 /EHsc)
+target_compile_definitions(PoserUiTests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_include_directories(PoserUiTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME PoserUiTests COMMAND PoserUiTests)
+
+add_test(NAME PoserBasisTests COMMAND PoserProbeTests --basis)
+add_test(NAME PoserAvatarTests COMMAND PoserProbeTests --avatar)

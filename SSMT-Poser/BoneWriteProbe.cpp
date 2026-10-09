@@ -40,7 +40,7 @@ Quaternion DeltaArm(const Quaternion& q) {
 namespace {
 RigCalls calls;
 NativeMethod getter, setter;
-NativeMethod localPositionGetter,worldPositionGetter,worldRotationGetter;
+NativeMethod localPositionGetter,worldPositionGetter,worldRotationGetter,localScaleGetter;
 bool geometryReady=false;
 uintptr_t parentEntry = 0, parentDescriptor = 0, activeEntry = 0, activeDescriptor = 0;
 struct Sample { unsigned mode; DWORD thread; uint64_t tick; Quaternion before, after; bool matched; };
@@ -255,13 +255,13 @@ bool InitializeBoneGeometry(GenshinNativeRuntime& runtime,std::ostream& report) 
     geometryReady=false;
     if (!Method(runtime,"Transform","get_localPosition",0,localPositionGetter) ||
         !Method(runtime,"Transform","get_position",0,worldPositionGetter) ||
-        !Method(runtime,"Transform","get_rotation",0,worldRotationGetter)) return false;
-    for (const auto& method : {localPositionGetter,worldPositionGetter}) {
+        !Method(runtime,"Transform","get_rotation",0,worldRotationGetter)||!Method(runtime,"Transform","get_localScale",0,localScaleGetter)) return false;
+    for (const auto& method : {localPositionGetter,worldPositionGetter,localScaleGetter}) {
         const auto internal=Relative(method.entry+28);
         if (!Pattern(method.entry,42,"48 89 CE C7 41 08 00 00 00 00 48 C7 01 00 00 00 00 48 89 D1 48 89 F2 E8 ?? ?? ?? ?? 48 89 F0") ||
             !Pattern(internal,80,"F2 0F 10 00 F2 0F 11 07 8B 40 08 89 47 08")) {report << "geometry_blocker=Vector3_wrapper_or_internal; method=" << method.name << '\n';return false;}
         const auto consumer=Relative(internal+39);
-        if (!consumer || !(method.metadataId==localPositionGetter.metadataId?
+        if (!consumer || !(method.metadataId==localScaleGetter.metadataId?Pattern(consumer,49,"42 0F 10 54 C1 20"):method.metadataId==localPositionGetter.metadataId?
             Pattern(consumer,49,"42 0F 10 14 C1"):
             Pattern(consumer,70,"F3 0F 11 03 66 0F 70 08 55 F3 0F 11 4B 04"))) {report << "geometry_blocker=Vector3_native_consumer; method=" << method.name << '\n';return false;}
         report << "[VECTOR_ABI] " << method.name << " id=" << method.metadataId << " entry=0x" << std::hex << method.entry
@@ -289,6 +289,14 @@ bool ReadBonePosition(uintptr_t object,uintptr_t expectedNative,Vector3& out,boo
             !Read(entries+size_t(index)*0x30,native) || std::memcmp(&native,&buffer.value,sizeof(native))) return false;
     }
     out=buffer.value; return true;
+}
+bool ReadBoneScale(uintptr_t object,uintptr_t expectedNative,Vector3& out) {
+    if(!geometryReady||!Alive(object,calls.transformClass,expectedNative))return false;
+    constexpr uint32_t canary=0x92FA372B;
+    struct Buffer {uint32_t first;Vector3 value;uint32_t last;} buffer{canary,{},canary};
+    const auto returned=reinterpret_cast<Vector3* (*)(Vector3*,uintptr_t,uintptr_t)>(localScaleGetter.entry)(&buffer.value,object,localScaleGetter.descriptor);
+    if(returned!=&buffer.value||buffer.first!=canary||buffer.last!=canary||!std::isfinite(buffer.value.x)||!std::isfinite(buffer.value.y)||!std::isfinite(buffer.value.z))return false;
+    out=buffer.value;return true;
 }
 bool ReadBoneWorldRotation(uintptr_t object,uintptr_t expectedNative,Quaternion& out) {
     if (!geometryReady || !Alive(object,calls.transformClass,expectedNative)) return false;
