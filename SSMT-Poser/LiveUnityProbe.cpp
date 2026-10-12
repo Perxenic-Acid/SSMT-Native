@@ -1,6 +1,7 @@
 #include "LiveUnityProbe.h"
 #include "RigProbe.h"
 #include "BoneWriteProbe.h"
+#include "IKTimingProbe.h"
 #include "MotionPlayback.h"
 #include "UiBridge.h"
 #include <algorithm>
@@ -817,6 +818,12 @@ bool RunMotionSession(GenshinNativeRuntime& runtime,HANDLE stop,HMODULE module,W
         }
     }
     if (passed) passed=InstallAnimationReturnProbe(runtime,stop,report);
+    bool ikTimingReady=false;
+    if (passed) {
+        // The game-owned callback is observed only after the existing MinHook
+        // session is live; IK probe failure must not block motion playback.
+        ikTimingReady=InstallIKTimingProbe(runtime,job.mainThread,SelectedRigAnimator(),report);
+    }
     if (passed) passed=ConfigureMotionAB(directory,report);
     report << "phase=" << (passed?"MOTION_COMMANDS_READY":"MOTION_REFERENCE_BLOCKED") << "; NUMPAD1=load_or_reload_and_play; NUMPAD2=stop_and_restore; NUMPAD3=finish_session; NumLock=ON; playback_control=MANUAL\n";
     report << "motion_path_file=motion_path.txt; command_flags=motion_play.flag,motion_stop.flag,motion_exit.flag\n"; report.flush();
@@ -964,6 +971,8 @@ bool RunMotionSession(GenshinNativeRuntime& runtime,HANDLE stop,HMODULE module,W
     } catch (const std::exception& error) { passed=false; report << "motion_worker_error=" << error.what() << '\n'; }
     DisableMotionWrites();
     if (MotionRigArmed()) { job.mode=8; passed=DispatchJob(stop,module,window,report,false)&&passed; ReportMotion(report); ReportMotionAB(report); }
+    if (ikTimingReady) passed=RemoveIKTimingProbe(report)&&passed;
+    ReportIKTimingProbe(report);
     passed=RemoveAnimationReturnProbe(report)&&passed;
     if (MotionRigArmed()) { job.mode=6; passed=DispatchJob(stop,module,window,report,false)&&passed; }
     if (BoneWriteArmed()) { job.mode=4; passed=DispatchJob(stop,module,window,report,false)&&passed; }

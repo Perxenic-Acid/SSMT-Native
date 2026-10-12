@@ -15,7 +15,7 @@ if(NOT TARGET minhook)
         "${CMAKE_CURRENT_BINARY_DIR}/PoserMinHook")
 endif()
 
-add_library(SSMT-Poser SHARED Plugin.cpp RuntimeProbe.cpp GenshinNativeRuntime.cpp LiveUnityProbe.cpp RigProbe.cpp BoneWriteProbe.cpp VmdMotion.cpp MotionPlayback.cpp UiBridge.cpp PoserUi.cpp)
+add_library(SSMT-Poser SHARED Plugin.cpp RuntimeProbe.cpp GenshinNativeRuntime.cpp LiveUnityProbe.cpp RigProbe.cpp BoneWriteProbe.cpp IKTimingProbe.cpp VmdMotion.cpp MotionPlayback.cpp UiBridge.cpp PoserUi.cpp)
 target_link_libraries(SSMT-Poser PRIVATE bcrypt user32 minhook comctl32 dwmapi gdi32 shell32 ole32 uuid)
 target_compile_options(SSMT-Poser PRIVATE /utf-8 /W4 /EHsc)
 target_compile_definitions(SSMT-Poser PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -32,7 +32,7 @@ if(SSMT_POSER_BUILD_TESTS)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Tests/ProbeTests.cpp" AND
        EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Tests/BasisTests.cpp" AND
        EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Tests/AvatarTests.cpp")
-        add_executable(PoserProbeTests Tests/ProbeTests.cpp Tests/BasisTests.cpp Tests/AvatarTests.cpp RuntimeProbe.cpp GenshinNativeRuntime.cpp LiveUnityProbe.cpp RigProbe.cpp BoneWriteProbe.cpp VmdMotion.cpp MotionPlayback.cpp UiBridge.cpp)
+        add_executable(PoserProbeTests Tests/ProbeTests.cpp Tests/BasisTests.cpp Tests/AvatarTests.cpp RuntimeProbe.cpp GenshinNativeRuntime.cpp LiveUnityProbe.cpp RigProbe.cpp BoneWriteProbe.cpp IKTimingProbe.cpp VmdMotion.cpp MotionPlayback.cpp UiBridge.cpp)
         target_link_libraries(PoserProbeTests PRIVATE bcrypt user32 minhook)
         target_compile_options(PoserProbeTests PRIVATE /utf-8 /W4 /EHsc)
         target_compile_definitions(PoserProbeTests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
