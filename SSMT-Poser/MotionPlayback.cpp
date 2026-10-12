@@ -20,6 +20,10 @@ bool footIK=false;
 float ikUnits=0;
 namespace {
 constexpr unsigned MaxRig=256,MaxSources=128,MaxSamples=64,MaxSnapshots=16;
+// Secondary-motion telemetry is deliberately small and read-only.  It gives
+// the later bake/physics pass a bounded set of passthrough bones without
+// changing the game's simulation or adding work to every rendered frame.
+constexpr unsigned MaxSecondaryBones=16,MaxSecondarySamples=32;
 constexpr unsigned MaxReferenceMeshes=64;
 // Nominal scale: 10 VMD units -> 1 Unity unit. This remains an empirical
 // calibration until the motion's matching PMX or a live axis test is available.
@@ -74,6 +78,11 @@ struct Leg {
     unsigned toggleSamples=0,toggleEnabledSamples=0,toggleDisabledSamples=0;
 };
 struct Sample { DWORD thread; uint64_t tick; double frame; unsigned matched; Quaternion left,right,head; };
+struct SecondaryPoint { int index=-1; Vector3 local{},world{}; };
+struct SecondarySample {
+    DWORD thread=0; uint64_t tick=0; double frame=0; unsigned count=0;
+    SecondaryPoint points[MaxSecondaryBones]{};
+};
 struct ABSnapshot {
     bool valid=false;basis::Settings settings;double frame=0,lastFrame=0;unsigned frames=0,writes=0;
     Quaternion auxiliaryBefore{0,0,0,1};bool auxiliaryCaptured=false;
@@ -113,6 +122,13 @@ struct Playback {
     double lastFrame=0;
     ABSnapshot abSnapshots[MaxSnapshots];
     Sample samples[MaxSamples]{};
+    int secondaryIndices[MaxSecondaryBones]{};
+    unsigned secondaryCount=0,secondarySampleCount=0;
+    uint64_t secondaryNextSample=0;
+    SecondarySample secondarySamples[MaxSecondarySamples]{};
+    Vector3 secondaryLastWorld[MaxSecondaryBones]{};
+    bool secondaryLastValid[MaxSecondaryBones]{};
+    float secondaryMaxDelta=0;
     Leg legs[2];
     unsigned ikWrites=0;
     unsigned referenceBones=0,referenceFailure=0;
@@ -297,6 +313,19 @@ bool BoneIdentity(const Bone& bone) {
     return bone.handle && reinterpret_cast<uintptr_t (*)(uint32_t)>(rigCalls.context.handleTarget)(bone.handle)==bone.identity.object &&
         Alive(bone.identity.object,bone.identity.native,rigCalls.transformClass) &&
         *reinterpret_cast<uintptr_t*>(bone.identity.native+0xA0)==bone.identity.parentNative;
+}
+bool SecondaryBoneName(std::wstring_view name) {
+    // These are intentionally conservative name hints.  Runtime component
+    // ownership remains with the game; this list only selects passthrough
+    // transforms for telemetry and never authorizes a write.
+    return name.find(L"Hair")!=std::wstring_view::npos ||
+        name.find(L"Pony")!=std::wstring_view::npos ||
+        name.find(L"Tail")!=std::wstring_view::npos ||
+        name.find(L"Ribbon")!=std::wstring_view::npos ||
+        name.find(L"Skirt")!=std::wstring_view::npos ||
+        name.find(L"Dress")!=std::wstring_view::npos ||
+        name.find(L"Cloth")!=std::wstring_view::npos ||
+        name.find(L"Coat")!=std::wstring_view::npos;
 }
 bool CopyName(uintptr_t object,wchar_t (&out)[128]) {
     const auto value=reinterpret_cast<uintptr_t (*)(uintptr_t,uintptr_t)>(rigCalls.name)(object,rigCalls.nameMethod);
@@ -662,6 +691,12 @@ void BuildSources() {
             if (bone.write) ++playback.controlledBones;
             else ++playback.passthroughBones;
         }
+    }
+    playback.secondaryCount=0;
+    for (unsigned i=0;i<playback.boneCount && playback.secondaryCount<MaxSecondaryBones;++i) {
+        const auto& bone=playback.bones[i];
+        if (bone.write || !bone.hasReference || !SecondaryBoneName(bone.identity.name)) continue;
+        playback.secondaryIndices[playback.secondaryCount++]=int(i);
     }
 }
 bool CaptureReference() {
@@ -1195,6 +1230,26 @@ void Tick() {
         if (playback.head>=0) ReadBoneRotation(playback.bones[playback.head].identity.object,playback.bones[playback.head].identity.native,sample.head);
         playback.nextSample=tick+500;
     }
+    if (playback.secondaryCount && tick>=playback.secondaryNextSample &&
+        playback.secondarySampleCount<MaxSecondarySamples) {
+        auto& sample=playback.secondarySamples[playback.secondarySampleCount++];
+        sample={}; sample.thread=GetCurrentThreadId(); sample.tick=tick; sample.frame=frame;
+        for (unsigned slot=0;slot<playback.secondaryCount;++slot) {
+            const auto index=playback.secondaryIndices[slot];
+            if (index<0 || unsigned(index)>=playback.boneCount) continue;
+            const auto& bone=playback.bones[index]; Vector3 local{},world{};
+            // A failed read only removes this point from telemetry.  It must
+            // never fault playback or hand a stale transform to a writer.
+            if (!BoneIdentity(bone) || !ReadBonePosition(bone.identity.object,bone.identity.native,local,false) ||
+                !ReadBonePosition(bone.identity.object,bone.identity.native,world,true)) continue;
+            auto& point=sample.points[sample.count++]; point.index=index; point.local=local; point.world=world;
+            if (playback.secondaryLastValid[slot])
+                playback.secondaryMaxDelta=std::max(playback.secondaryMaxDelta,
+                    ik::Length(ik::Sub(world,playback.secondaryLastWorld[slot])));
+            playback.secondaryLastWorld[slot]=world; playback.secondaryLastValid[slot]=true;
+        }
+        playback.secondaryNextSample=tick+500;
+    }
 }
 void Q(std::ostream& out,const Quaternion& q) { out << '(' << q.x << ',' << q.y << ',' << q.z << ',' << q.w << ')'; }
 }
@@ -1673,6 +1728,8 @@ bool MotionMainStep(unsigned mode) {
         }
     }
     for (auto& bone:playback.bones) {bone.desiredWorld=bone.rest.rotation;bone.touched=false;bone.restoreChecked=false;bone.nativeHandoffRotation=bone.restoreRotation;bone.nativeHandoffValid=false;bone.fingerWrites=0;bone.fingerMotion=0;}
+    playback.secondarySampleCount=0; playback.secondaryNextSample=0; playback.secondaryMaxDelta=0;
+    for (auto& valid:playback.secondaryLastValid) valid=false;
     playback.motionRoot=Named(L"Bip001");
     if(playback.motionRoot<0||playback.motionRoot==playback.root||
         playback.bones[playback.motionRoot].identity.parent!=playback.root||
@@ -1782,6 +1839,26 @@ void ReportMotion(std::ostream& report) {
         << " motion_root_world_max_delta=" << playback.motionRootWorldMaxDelta
         << " root_actor_index=" << playback.root << " root_motion_index=" << playback.motionRoot
         << " root_motion_name=Bip001 root_motion_scale=" << VmdPositionScale << '\n';
+    report << "[SECONDARY_MOTION_TELEMETRY] enabled=" << (playback.secondaryCount!=0)
+        << " candidate_bones=" << playback.secondaryCount
+        << " samples=" << playback.secondarySampleCount
+        << " max_world_delta=" << playback.secondaryMaxDelta
+        << " source=PASSTHROUGH_BONES_READONLY simulation=GAME_OWNED writes=NONE interval_ms=500\n";
+    for (unsigned sampleIndex=0;sampleIndex<playback.secondarySampleCount;++sampleIndex) {
+        const auto& sample=playback.secondarySamples[sampleIndex];
+        report << "[SECONDARY_MOTION_SAMPLE] index=" << sampleIndex << " tid=" << sample.thread
+            << " tick=" << sample.tick << " frame=" << sample.frame << " points=" << sample.count;
+        for (unsigned pointIndex=0;pointIndex<sample.count;++pointIndex) {
+            const auto& point=sample.points[pointIndex];
+            char name[128]{};
+            if (point.index>=0 && unsigned(point.index)<playback.boneCount)
+                WideCharToMultiByte(CP_UTF8,0,playback.bones[point.index].identity.name,-1,name,sizeof(name),nullptr,nullptr);
+            report << " bone=" << (name[0]?name:"UNKNOWN") << " local="
+                << point.local.x << ',' << point.local.y << ',' << point.local.z << " world="
+                << point.world.x << ',' << point.world.y << ',' << point.world.z;
+        }
+        report << '\n';
+    }
     report << "[MOTION_STOP] disposition=" << StopDispositionName(playback.stopDisposition)
         << " owner_identity_at_stop=" << playback.ownerActiveAtStopCaptured
         << " owner_active_at_stop=" << playback.ownerActiveAtStop
