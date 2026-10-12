@@ -30,7 +30,10 @@ inline Quaternion Local(Quaternion bindLocal,Quaternion modelBind,Quaternion vmd
     return vmd::Multiply(bindLocal,Delta(modelBind,vmdLocal));
 }
 inline Quaternion Input(const Settings& settings,std::wstring_view source,Quaternion sampled) {
-    if (!settings.enabled) return sampled;
+    // The normal player path uses disabled settings as its Legacy mode. It
+    // still targets the same MODEL_Y_180 avatar frame as the validated FK
+    // path; leaving this branch raw mirrors hands/fingers on the live model.
+    if (!settings.enabled) return ModelInput(sampled);
     if(FkTest(settings)) {
         const auto finger=fingers::Slot(source);
         const bool included=source==L"下半身"?settings.fullFK:MainFk(source)||finger>=0||(settings.fullFK&&LegsFk(source));

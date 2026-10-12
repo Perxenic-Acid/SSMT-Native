@@ -226,6 +226,8 @@ uintptr_t SelectedRigAnimator() {
 }
 void BeginRigSelection() {
     std::memset(&snapshot,0,sizeof(snapshot));
+    snapshot.selectedActor = -1;
+    snapshot.selectedBody = -1;
     selectionRooted=selectionFreed=0;
     targetMatched=false;
 }
