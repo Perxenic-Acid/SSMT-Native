@@ -52,9 +52,9 @@ void GateControls(HWND window) {
     EnableWindow(GetDlgItem(window,ui_control::Play),view.ready&&view.loaded&&!view.playing);
     EnableWindow(GetDlgItem(window,ui_control::Stop),view.playing);
     EnableWindow(GetDlgItem(window,ui_control::Unload),view.loaded&&!view.playing);
-    EnableWindow(GetDlgItem(window,ui_control::Release),view.ready&&!view.playing);
-    EnableWindow(GetDlgItem(window,ui_control::Bind),!view.playing&&!view.failed);
-    EnableWindow(GetDlgItem(window,ui_control::Refresh),!view.playing&&!view.failed);
+    EnableWindow(GetDlgItem(window,ui_control::Release),!view.playing&&!view.actor.empty());
+    EnableWindow(GetDlgItem(window,ui_control::Bind),!view.playing);
+    EnableWindow(GetDlgItem(window,ui_control::Refresh),!view.playing);
     EnableWindow(GetDlgItem(window,ui_control::Browse),!view.playing);
     EnableWindow(path,!view.playing);
 }
