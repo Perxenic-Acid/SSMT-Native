@@ -22,6 +22,10 @@ constexpr unsigned MaxReferenceMeshes=64;
 // Nominal scale: 10 VMD units -> 1 Unity unit. This remains an empirical
 // calibration until the motion's matching PMX or a live axis test is available.
 constexpr float VmdPositionScale=0.1f;
+// The previous analytic two-bone path produced invalid leg poses in live
+// playback. Keep its write path compile-time disabled until a verified game
+// IK callback and target-space contract replace it.
+constexpr bool AnalyticFootIkEnabled=false;
 struct ReferenceMesh {
     uintptr_t renderer=0,native=0,transform=0,transformNative=0,array=0,mesh=0,meshNative=0;
     uint32_t handles[3]{};
@@ -177,6 +181,9 @@ std::atomic<float> progressSeconds{0};
 bool footIK=false;
 float ikUnits=0;
 basis::Settings abSettings;
+bool FootIKWritePathEnabled() {
+    return AnalyticFootIkEnabled&&footIK&&!abSettings.enabled;
+}
 std::filesystem::path abOutput;
 std::atomic<unsigned> abStage{UINT_MAX};
 uintptr_t activeEntry=0,activeDescriptor=0;
@@ -600,7 +607,7 @@ void BuildSources() {
     }
     for (unsigned side=0;side<2;++side) {
         auto& leg=playback.legs[side];leg={};
-        if (!footIK||abSettings.enabled) continue;
+        if (!FootIKWritePathEnabled()) continue;
         const std::wstring prefix=side?L"右":L"左",target=side?L"Bip001 R ":L"Bip001 L ";
         leg.thigh=Named(target+L"Thigh");leg.calf=Named(target+L"Calf");leg.foot=Named(target+L"Foot");
         leg.track=Track(prefix+L"足ＩＫ");if (leg.track<0) leg.track=Track(prefix+L"足IK");
@@ -821,7 +828,7 @@ bool IKSet(int index,Quaternion world) {
     ++playback.ikWrites;return true;
 }
 bool PrepareIK() {
-    if (!footIK||abSettings.enabled) return true;
+    if (!FootIKWritePathEnabled()) return true;
     Vector3 root{};Quaternion rotation{};
     if (!Position(playback.root,root)||!WorldRotation(playback.root,rotation)) return false;
     for (auto& leg:playback.legs) if (leg.track>=0) {
@@ -857,7 +864,7 @@ bool PrepareIK() {
     return true;
 }
 bool SolveIK(double frame,float blend) {
-    if (!footIK||abSettings.enabled) return true;
+    if (!FootIKWritePathEnabled()) return true;
     Vector3 root{};Quaternion rotation{};
     if (!Position(playback.root,root)||!WorldRotation(playback.root,rotation)) return false;
     for (unsigned side=0;side<2;++side) {
@@ -1128,7 +1135,7 @@ bool ConfigureMotionAB(const std::filesystem::path& directory,std::ostream& repo
     report<<"[MMD_TOOLS_BASIS_AB_TEST] enabled="<<next.enabled<<" route="<<basis::RouteName(next.route)<<" pose="<<basis::PoseName(next.pose)<<" frame="<<next.frame
         <<" axes="<<(basis::FkTest(next)?"FK_MODEL_Y_180":modelFrame?"MODEL_Y_180":"MMD_XYZ_TO_UNITY_MODEL_XYZ")
         <<"; axis_alignment="<<(modelFrame?"STATIC_GEOMETRY_GATED_VISUAL_CHECK_REQUIRED":"EXPERIMENT_ASSUMPTION")
-        <<"; IK="<<(next.enabled?"OFF":footIK?"CONFIGURED":"OFF")<<"; source_frame0=PRESERVED\n";
+        <<"; IK="<<(next.enabled?"OFF":FootIKWritePathEnabled()?"CONFIGURED":"OFF")<<"; source_frame0=PRESERVED\n";
     report.flush();return true;
 }
 bool SelectMotionAB(unsigned command,std::ostream& report) {
@@ -1426,6 +1433,36 @@ bool LoadMotionClip(const std::filesystem::path& path,std::ostream& report,HANDL
     if (!vmd::Load(path,loaded,error,stop)) { report << "motion_load=REJECTED; reason=" << error << '\n'; report.flush(); return false; }
     report << "[VMD_FILE] bytes=" << loaded.bytes << " bone_keys=" << loaded.boneKeys << " tracks=" << loaded.tracks.size()
         << " ik_tracks=" << loaded.ikTracks.size() << " last_frame=" << loaded.lastFrame << " fps=30 camera_keys=" << loaded.cameraKeys << " morph_keys=" << loaded.morphKeys << '\n';
+    // Keep the VMD IK target data observable while the analytic writer is
+    // disabled. These samples establish the raw -> MODEL_Y_180 conversion
+    // and parent-track composition needed by the future game-native path.
+    const auto reportFootTarget=[&](const char* side,const wchar_t* targetName,const wchar_t* targetAlt,
+        const wchar_t* parentName,const wchar_t* parentAlt) {
+        auto targetTrack=vmd::FindTrack(loaded,targetName);
+        if (targetTrack<0) targetTrack=vmd::FindTrack(loaded,targetAlt);
+        auto parentTrack=vmd::FindTrack(loaded,parentName);
+        if (parentTrack<0) parentTrack=vmd::FindTrack(loaded,parentAlt);
+        report << "[FOOT_IK_TARGET] side=" << side << " track=" << targetTrack
+            << " parent_track=" << parentTrack
+            << " target_keys=" << (targetTrack>=0?loaded.tracks[size_t(targetTrack)].keys.size():0)
+            << " parent_keys=" << (parentTrack>=0?loaded.tracks[size_t(parentTrack)].keys.size():0)
+            << " coordinate_contract=VMD_MODEL_TO_MODEL_Y_180; writer=BLOCKED\n";
+        for (const double requestedFrame : {0.0,30.0,120.0}) {
+            const auto raw=targetTrack>=0?vmd::SamplePosition(loaded.tracks[size_t(targetTrack)],requestedFrame):Vector3{};
+            const auto parentRaw=parentTrack>=0?vmd::SamplePosition(loaded.tracks[size_t(parentTrack)],requestedFrame):Vector3{};
+            const auto model=ik::ModelPosition(raw),parentModel=ik::ModelPosition(parentRaw);
+            const auto combined=ik::Add(model,parentModel);
+            report << "  sample_frame=" << requestedFrame << " raw=" << raw.x << ',' << raw.y << ',' << raw.z
+                << " model=" << model.x << ',' << model.y << ',' << model.z
+                << " parent_raw=" << parentRaw.x << ',' << parentRaw.y << ',' << parentRaw.z
+                << " parent_model=" << parentModel.x << ',' << parentModel.y << ',' << parentModel.z
+                << " combined_model=" << combined.x << ',' << combined.y << ',' << combined.z << '\n';
+        }
+    };
+    reportFootTarget("L",L"左足ＩＫ",L"左足IK",L"左足ＩＫ親",L"左足IK親");
+    reportFootTarget("R",L"右足ＩＫ",L"右足IK",L"右足ＩＫ親",L"右足IK親");
+    report << "[FOOT_IK_GATE] analytic_solver=DISABLED compile_time=0 runtime_flag=" << footIK
+        << " writes=BLOCKED reason=WAIT_FOR_VERIFIED_GAME_NATIVE_IK_PATH\n";
     for (const auto& track : loaded.ikTracks) {
         char name[128]{}; WideCharToMultiByte(CP_UTF8,0,track.name.c_str(),-1,name,sizeof(name),nullptr,nullptr);
         report << "[VMD_IK_TRACK] name=" << name << " keys=" << track.keys.size()
@@ -1470,8 +1507,8 @@ bool LoadMotionClip(const std::filesystem::path& path,std::ostream& report,HANDL
     report << "motion_load=" << ((playback.mapped && playback.writeBones)||rootTrack?"READY":"REJECTED_UNMAPPED") << " mapped_tracks=" << playback.mapped
         << " write_bones=" << playback.writeBones << " controlled_bones=" << playback.controlledBones << " passthrough_bones=" << playback.passthroughBones
         << " retarget=STATIC_MESH_BIND_REFERENCE; positions=ROOT_BIP001_LOCAL; root_motion=Center+Groove; center_track=" << centerTrack
-        << " groove_track=" << grooveTrack << " vmd_position_scale=" << VmdPositionScale << "; axis=MODEL_Y_180; foot_IK=" << (abSettings.enabled?"EXCLUDED_AB_TEST":footIK?"ANALYTIC_TWO_BONE_PREVIEW":"NOT_SOLVED") << "; morphs=NOT_APPLIED\n";
-    if (footIK&&!abSettings.enabled) {
+        << " groove_track=" << grooveTrack << " vmd_position_scale=" << VmdPositionScale << "; axis=MODEL_Y_180; foot_IK=" << (abSettings.enabled?"EXCLUDED_AB_TEST":FootIKWritePathEnabled()?"ANALYTIC_TWO_BONE_PREVIEW":"DISABLED_ANALYTIC_SOLVER") << "; morphs=NOT_APPLIED\n";
+    if (FootIKWritePathEnabled()) {
         unsigned legs=0;for (const auto& leg:playback.legs) legs+=leg.track>=0;
         report << "foot_IK_legs=" << legs << " game_units_per_VMD_unit=" << ikUnits << " calibration=STATIC_BIND_FRAME0_RELATIVE_TARGET; ik_toggle_tracks=CONSUMED; source_PMX_rest=NOT_AVAILABLE; D_grants=NOT_APPLIED\n";
         if (legs!=2) {report << "motion_load=REJECTED; reason=FOOT_IK_REQUIRES_BOTH_TARGET_CHAINS_AND_TRACKS\n";report.flush();return false;}
@@ -1588,6 +1625,7 @@ void ReportMotion(std::ostream& report) {
     report << std::setprecision(9) << "[MOTION] armed=" << playback.armed << " status=" << status.load() << " captured=" << playback.captured
         << " restore=" << playback.restore << " fault=" << playback.fault << " mapped=" << playback.mapped << " write_bones=" << playback.writeBones
         << " frames=" << playback.frames << " writes=" << playback.writes << " restored_bones=" << playback.restoredBones
+        << " ik_writes=" << playback.ikWrites
         << " GC_created=" << playback.rooted << " GC_freed=" << playback.freed << " max_tick_us=" << playback.maxTickMicroseconds
         << " controlled_bones=" << playback.controlledBones << " passthrough_bones=" << playback.passthroughBones
         << " root_position_captured=" << playback.rootPositionCaptured << " root_position_touched=" << playback.rootPositionTouched
@@ -1644,7 +1682,10 @@ void ReportMotion(std::ostream& report) {
         report << " expected=0x" << std::hex << playback.ownerFailureExpected
             << " observed=0x" << playback.ownerFailureObserved << std::dec << '\n';
     }
-    if (footIK) for (unsigned side=0;side<2;++side) {
+    report << "[FOOT_IK_GATE] analytic_solver=DISABLED compile_time=0 runtime_flag=" << footIK
+        << " writes=" << playback.ikWrites << " target_space=VMD_MODEL_TO_MODEL_Y_180"
+        << " reason=WAIT_FOR_VERIFIED_GAME_NATIVE_IK_PATH\n";
+    if (FootIKWritePathEnabled()) for (unsigned side=0;side<2;++side) {
         const auto& leg=playback.legs[side];
         report << "[FOOT_IK] side=" << side << " track=" << leg.track << " upper=" << leg.upper << " lower=" << leg.lower << " ticks=" << leg.ticks
             << " clamped=" << leg.clamped << " enabled_ticks=" << leg.enabledTicks << " toggle_track=" << leg.toggleTrack << " max_residual=" << leg.maxResidual << " units=" << ikUnits << " IK_quaternion_writes=" << playback.ikWrites

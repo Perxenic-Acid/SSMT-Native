@@ -121,9 +121,11 @@ struct Job {
     bool classParentLayoutValidated = false;
     NativeMethod human, rootBone, bones, mesh;
     NativeMethod fbikEffectorCount, fbikChainCount, fbikCheckPass;
+    NativeMethod animatorLayerCount, animatorLayerEnable;
     NativeMethod fbikChainElementCount;
     bool fbikMethodsReady = false;
     bool fbikChainElementMethodReady = false;
+    bool animatorLayerMethodsReady = false;
     bool fbikProbeEnabled = false;
     bool fbikRead = false, fbikPass = false;
     unsigned fbikReadFailure = 0;
@@ -131,6 +133,11 @@ struct Job {
     int fbikEffectors = -1, fbikChains = -1;
     std::array<int, 64> fbikElementCounts{};
     unsigned fbikElementRead = 0;
+    bool animatorLayerRead = false;
+    int animatorLayerCountValue = -1;
+    std::array<int8_t, 8> animatorLayerEnabled{};
+    unsigned animatorLayerReadCount = 0;
+    DWORD animatorLayerReadFault = 0;
     DWORD mainThread = 0, actualThread = 0, fault = 0;
     uintptr_t runtimeThread = 0;
     unsigned step = 0;
@@ -155,6 +162,7 @@ UINT dispatchMessage = 0;
 using Getter = uintptr_t (*)(uintptr_t, uintptr_t);
 using IntGetter = int (*)(uintptr_t, uintptr_t);
 using IndexedIntGetter = int (*)(uintptr_t, int, uintptr_t);
+using IndexedBoolGetter = bool (*)(uintptr_t, int, uintptr_t);
 using Factory = uintptr_t (*)(uintptr_t);
 using NewHandle = uint32_t (*)(uintptr_t, bool);
 using TargetHandle = uintptr_t (*)(uint32_t);
@@ -191,6 +199,33 @@ bool ReadFBIKCounts(uintptr_t animator) {
 DWORD ReadFBIKCountsGuarded(uintptr_t animator, bool& read) {
     __try {
         read = ReadFBIKCounts(animator);
+        return 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        read = false;
+        return GetExceptionCode();
+    }
+}
+bool ReadAnimatorIKLayers(uintptr_t animator) {
+    if (!animator || !job.animatorLayerMethodsReady) return false;
+    const auto layerCount = reinterpret_cast<IntGetter>(job.animatorLayerCount.entry)(
+        animator, job.animatorLayerCount.descriptor);
+    if (layerCount < 0 || layerCount > 256) return false;
+    job.animatorLayerCountValue = layerCount;
+    job.animatorLayerEnabled.fill(-1);
+    job.animatorLayerReadCount = 0;
+    const auto enable = reinterpret_cast<IndexedBoolGetter>(job.animatorLayerEnable.entry);
+    const auto sampled = std::min(layerCount, int(job.animatorLayerEnabled.size()));
+    for (int layer = 0; layer < sampled; ++layer) {
+        job.animatorLayerEnabled[static_cast<size_t>(layer)] = enable(
+            animator, layer, job.animatorLayerEnable.descriptor) ? 1 : 0;
+        ++job.animatorLayerReadCount;
+    }
+    job.animatorLayerRead = true;
+    return true;
+}
+DWORD ReadAnimatorIKLayersGuarded(uintptr_t animator, bool& read) {
+    __try {
+        read = ReadAnimatorIKLayers(animator);
         return 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         read = false;
@@ -610,6 +645,9 @@ bool ExecuteGuarded() {
                 if (job.fbikReadFault) job.fbikReadFailure=3;
                 else if (!job.fbikRead) job.fbikReadFailure=2;
             }
+        }
+        if (job.fbikProbeEnabled && job.animatorLayerMethodsReady && selectedAnimator) {
+            job.animatorLayerReadFault = ReadAnimatorIKLayersGuarded(selectedAnimator, job.animatorLayerRead);
         }
         job.step = 8;
         job.complete = true;
@@ -1089,9 +1127,15 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
         Method(runtime, "Animator", "GetFBIKChainCount", 0, job.fbikChainCount) &&
         Method(runtime, "Animator", "CheckIfInIKPass", 0, job.fbikCheckPass);
     job.fbikChainElementMethodReady = Method(runtime, "Animator", "GetFBIKChainElementCount", 1, job.fbikChainElementCount);
+    // Layer IK state is a scalar read-only API. Resolve it separately from
+    // FBIK so an unavailable optional method never blocks the existing probe.
+    job.animatorLayerMethodsReady =
+        Method(runtime, "Animator", "get_layerCount", 0, job.animatorLayerCount) &&
+        Method(runtime, "Animator", "GetLayerEnableOnAnimatorIK", 1, job.animatorLayerEnable);
     report << "[FBIK_METHODS] available=" << job.fbikMethodsReady
         << " chain_element_count=" << job.fbikChainElementMethodReady
-        << " position_rotation_calls=DEFERRED_ABI_VALIDATION\n";
+        << " position_rotation_calls=DEFERRED_ABI_VALIDATION"
+        << " animator_ik_layers=" << job.animatorLayerMethodsReady << '\n';
     if (job.fbikMethodsReady) {
         for (const auto& method : {job.fbikEffectorCount, job.fbikChainCount, job.fbikCheckPass}) {
             report << "[FBIK_METHOD] " << method.name << " metadataId=" << method.metadataId
@@ -1105,6 +1149,13 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
         report << "[FBIK_METHOD] " << method.name << " metadataId=" << method.metadataId
             << " parameterCount=" << unsigned(method.parameterCount) << '\n';
         Address(report, "entry", method.entry); Address(report, "target", method.target); Address(report, "descriptor", method.descriptor);
+    }
+    if (job.animatorLayerMethodsReady) {
+        for (const auto& method : {job.animatorLayerCount, job.animatorLayerEnable}) {
+            report << "[ANIMATOR_IK_METHOD] " << method.name << " metadataId=" << method.metadataId
+                << " parameterCount=" << unsigned(method.parameterCount) << '\n';
+            Address(report, "entry", method.entry); Address(report, "target", method.target); Address(report, "descriptor", method.descriptor);
+        }
     }
     for (const auto& method : {job.human, job.rootBone, job.bones, job.mesh}) {
         report << "[SCENE_GETTER] " << method.name << " metadataId=" << method.metadataId << '\n';
@@ -1211,6 +1262,8 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
         job.complete = false; job.fault = 0; job.step = 0; job.mode=0; job.runtimeThread = 0;
         job.fbikRead = false; job.fbikPass = false; job.fbikEffectors = -1; job.fbikChains = -1;
         job.fbikReadFailure = 0; job.fbikReadFault = 0; job.fbikElementRead = 0;
+        job.animatorLayerRead = false; job.animatorLayerCountValue = -1;
+        job.animatorLayerEnabled.fill(-1); job.animatorLayerReadCount = 0; job.animatorLayerReadFault = 0;
         if (WaitForSingleObject(stop, 0) == WAIT_OBJECT_0) return false;
         if (Read(job.context.mainThreadSlot, job.mainThread) && job.mainThread) {
             Window window{job.mainThread, nullptr};
@@ -1284,6 +1337,18 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
                             }
                         }
                         report << '\n';
+                    }
+                    if (i == 2 && job.animatorLayerMethodsReady) {
+                        report << "[ANIMATOR_IK_LAYERS] read=" << job.animatorLayerRead
+                            << " layer_count=" << job.animatorLayerCountValue
+                            << " sampled=" << job.animatorLayerReadCount
+                            << " fault=0x" << std::hex << job.animatorLayerReadFault << std::dec
+                            << " enabled=";
+                        for (unsigned layer = 0; layer < job.animatorLayerReadCount; ++layer) {
+                            if (layer) report << ',';
+                            report << int(job.animatorLayerEnabled[layer]);
+                        }
+                        report << " max_sampled=8 call_mode=READONLY_MAIN_THREAD\n";
                     }
                 }
                 report << "[GROUND_IK_HIERARCHY_SCAN] read=" << job.componentScanRead
