@@ -25,11 +25,21 @@ bool Take(Command& command) {
 }
 Snapshot Read() {std::lock_guard lock(mutex);return snapshot;}
 void PublishCatalog(std::vector<Rig> rigs) {
-    std::lock_guard lock(mutex);snapshot.rigs=std::move(rigs);++snapshot.generation;++snapshot.revision;
+    std::lock_guard lock(mutex);
+    if (rigs.empty()&&!snapshot.rigs.empty()) {
+        if (!snapshot.catalogStale) {snapshot.catalogStale=true;++snapshot.generation;++snapshot.revision;}
+        return;
+    }
+    snapshot.rigs=std::move(rigs);snapshot.catalogStale=false;++snapshot.generation;++snapshot.revision;
+}
+void MarkCatalogStale() {
+    std::lock_guard lock(mutex);
+    if (snapshot.catalogStale) return;
+    snapshot.catalogStale=true;++snapshot.generation;++snapshot.revision;
 }
 bool ValidateSelection(const Command& command) {
     std::lock_guard lock(mutex);
-    if (command.kind!=CommandKind::BindActor||command.generation!=snapshot.generation||command.text.empty()) return false;
+    if (snapshot.catalogStale||command.kind!=CommandKind::BindActor||command.generation!=snapshot.generation||command.text.empty()) return false;
     return std::count_if(snapshot.rigs.begin(),snapshot.rigs.end(),[&](const Rig& rig){return rig.selectable&&rig.name==command.text;})==1;
 }
 void State(const std::wstring& text,bool ready,bool loaded,bool playing,bool failed) {

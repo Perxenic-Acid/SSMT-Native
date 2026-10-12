@@ -13,7 +13,7 @@ struct Snapshot {
     uint64_t generation=0,revision=0;
     unsigned tracks=0,bones=0;
     float seconds=0,position=0;
-    bool ready=false,loaded=false,playing=false,failed=false;
+    bool ready=false,loaded=false,playing=false,failed=false,catalogStale=false;
 };
 void Reset(bool enabled);
 bool Enabled();
@@ -22,6 +22,7 @@ bool Submit(Command command);
 bool Take(Command& command);
 Snapshot Read();
 void PublishCatalog(std::vector<Rig> rigs);
+void MarkCatalogStale();
 bool ValidateSelection(const Command& command);
 void State(const std::wstring& message,bool ready,bool loaded,bool playing,bool failed=false);
 void Bound(const std::wstring& actor,unsigned bones);

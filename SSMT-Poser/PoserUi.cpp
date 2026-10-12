@@ -53,7 +53,7 @@ void GateControls(HWND window) {
     EnableWindow(GetDlgItem(window,ui_control::Stop),view.playing);
     EnableWindow(GetDlgItem(window,ui_control::Unload),view.loaded&&!view.playing);
     EnableWindow(GetDlgItem(window,ui_control::Release),!view.playing&&!view.actor.empty());
-    EnableWindow(GetDlgItem(window,ui_control::Bind),!view.playing);
+    EnableWindow(GetDlgItem(window,ui_control::Bind),!view.playing&&!view.catalogStale);
     EnableWindow(GetDlgItem(window,ui_control::Refresh),!view.playing);
     EnableWindow(GetDlgItem(window,ui_control::Browse),!view.playing);
     EnableWindow(path,!view.playing);
@@ -102,7 +102,7 @@ void Update(HWND window) {
     if (next.generation!=shownGeneration) {
         SendMessageW(rigs,LB_RESETCONTENT,0,0);int selection=-1;
         for (size_t i=0;i<next.rigs.size();++i) {
-            const auto& rig=next.rigs[i];const auto line=rig.label+L"   ·   "+std::to_wstring(rig.bones)+L" 骨   ·   "+(rig.selectable?L"可绑定":rig.active?L"只读":L"未激活");
+            const auto& rig=next.rigs[i];const auto line=rig.label+L"   ·   "+std::to_wstring(rig.bones)+L" 骨   ·   "+(next.catalogStale?L"上次扫描":rig.selectable?L"可绑定":rig.active?L"只读":L"未激活");
             SendMessageW(rigs,LB_ADDSTRING,0,reinterpret_cast<LPARAM>(line.c_str()));
             if (rig.name==selected||(selected.empty()&&rig.selectable)) selection=int(i);
         }
@@ -111,7 +111,8 @@ void Update(HWND window) {
     }
     if (next.path!=view.path&&!next.path.empty()) SetWindowTextW(path,next.path.c_str());
     view=std::move(next);shownRevision=view.revision;
-    SetWindowTextW(statusLabel,view.message.c_str());
+    const auto status=view.catalogStale?L"场景切换中；列表保留上次有效扫描，当前不可绑定。":view.message;
+    SetWindowTextW(statusLabel,status.c_str());
     const auto actor=view.actor.empty()?L"尚未绑定骨架":L"当前骨架："+view.actor+L"   ·   "+std::to_wstring(view.bones)+L" 骨";
     SetWindowTextW(actorLabel,actor.c_str());
     const auto motion=view.loaded?L"已载入   ·   "+std::to_wstring(view.tracks)+L" 轨道   ·   "+std::to_wstring(int(view.seconds))+L" 秒":L"未载入动作";

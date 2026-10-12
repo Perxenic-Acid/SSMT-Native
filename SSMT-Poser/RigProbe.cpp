@@ -40,6 +40,7 @@ RigCalls calls;
 NativeMethod parentMethod, getChildMethod, activeMethod;
 wchar_t requestedActor[128]{};
 unsigned selectionRooted=0,selectionFreed=0;
+bool targetMatched=false;
 using Getter = uintptr_t (*)(uintptr_t, uintptr_t);
 using BoolGetter = bool (*)(uintptr_t, uintptr_t);
 template<class T> bool Read(uintptr_t address, T& value) {
@@ -216,9 +217,17 @@ void SetRigWriteTarget(const std::wstring& name) {
     if (name.size()<std::size(requestedActor)) std::copy(name.begin(),name.end(),requestedActor);
 }
 bool RigHasTarget() { return requestedActor[0]!=0; }
+bool RigTargetUnavailable() { return RigHasTarget()&&!targetMatched; }
+uintptr_t SelectedRigAnimator() {
+    if (!snapshot.complete || snapshot.selectedActor < 0 || snapshot.selectedActor >= snapshot.actorCount) return 0;
+    const auto animatorIndex = snapshot.actors[snapshot.selectedActor].animator;
+    if (animatorIndex < 0 || animatorIndex >= snapshot.animatorCount) return 0;
+    return snapshot.animators[animatorIndex].object;
+}
 void BeginRigSelection() {
     std::memset(&snapshot,0,sizeof(snapshot));
     selectionRooted=selectionFreed=0;
+    targetMatched=false;
 }
 int MatchRigCandidate(uintptr_t renderer) {
     const auto transform=reinterpret_cast<Getter>(calls.transform)(renderer,calls.transformMethod);
@@ -226,8 +235,9 @@ int MatchRigCandidate(uintptr_t renderer) {
     if (body==-2) return 0;
     if (body<0) return -1;
     if (!snapshot.nodes[body].active) return 0;
+    if (!RigHasTarget()) return PlayerBranch(body)?1:0;
     for (auto node=body;node>=0;node=snapshot.nodes[node].parent) {
-        if (std::wcscmp(snapshot.nodes[node].name,requestedActor)==0 && snapshot.nodes[node].active && PlayerBranch(node)) return 1;
+        if (std::wcscmp(snapshot.nodes[node].name,requestedActor)==0 && snapshot.nodes[node].active && PlayerBranch(node)) { targetMatched=true; return 1; }
     }
     return 0;
 }
@@ -336,13 +346,16 @@ bool CaptureRig(uintptr_t renderer, uintptr_t transform, uintptr_t bones, uint64
         for (int j=0;j<snapshot.activeAvatarRoots;++j) duplicate|=roots[j]==root;
         if (!duplicate) roots[snapshot.activeAvatarRoots++]=root;
     }
-    if (requestedActor[0] && snapshot.coreChains && snapshot.selectedActor>=0) {
+    if (snapshot.coreChains && snapshot.selectedActor>=0) {
         const auto& actor=snapshot.actors[snapshot.selectedActor];
         const auto& animator=snapshot.animators[actor.animator];
         const auto& root=snapshot.nodes[animator.node];
         const auto& head=snapshot.nodes[actor.head];
         const auto targetIndex=Named(BoneWriteTargetName());
-        if (snapshot.activeAvatarRoots==1 && PlayerBranch(animator.node) && std::wcscmp(root.name,requestedActor)==0 && root.active && head.active && snapshot.nodes[actor.body].active &&
+        // activeAvatarRoots 是场景诊断信息，不是目标身份条件。角色切换、技能
+        // 模型和多 renderer 场景可以同时存在多个活动 AvatarRoot；目标仍必须
+        // 通过请求名称、玩家分支、Head 链和核心骨链的全部校验。
+        if (PlayerBranch(animator.node) && (!requestedActor[0] || std::wcscmp(root.name,requestedActor)==0) && root.active && head.active && snapshot.nodes[actor.body].active &&
             head.parent>=0 && std::wcscmp(snapshot.nodes[head.parent].name,L"Bip001 Neck")==0) {
             if (targetIndex<0 || Distance(targetIndex,animator.node)<0) return false;
             const auto& target=snapshot.nodes[targetIndex];
@@ -363,6 +376,10 @@ bool CaptureRig(uintptr_t renderer, uintptr_t transform, uintptr_t bones, uint64
                 }
                 if (!ArmMotionRig(calls,root.transform,actor.renderer,animator.object,
                     std::span<const MotionRigBone>(motionBones,size_t(snapshot.selectedNodeCount)),activeMethod.entry,activeMethod.descriptor)) return false;
+                if (!requestedActor[0]) {
+                    std::wmemcpy(requestedActor,root.name,std::min(std::size(root.name),std::size(requestedActor)-1));
+                    targetMatched=true;
+                }
                 if (!CaptureMotionRenderers(renderers,rendererCount)) return false;
             }
         }
@@ -377,22 +394,34 @@ void ReleaseRigProbe() {
 }
 bool ExportRigProbe(const std::filesystem::path& directory, std::ostream& report) {
     if (ui::Enabled()) {
-        std::vector<ui::Rig> catalog;
-        for (int i=0;i<snapshot.actorCount;++i) {
-            const auto& actor=snapshot.actors[i];const auto root=snapshot.animators[actor.animator].node;
-            if (root<0) continue;
-            bool previous=false;
-            for (int j=0;j<i;++j) previous|=snapshot.animators[snapshot.actors[j].animator].node==root&&snapshot.actors[j].head==actor.head;
-            if (previous) continue;
-            const auto& node=snapshot.nodes[root];const std::wstring name(node.name,size_t(node.nameLength));
-            const auto active=node.active&&snapshot.nodes[actor.body].active&&snapshot.nodes[actor.head].active;
-            const auto selectable=active&&PlayerBranch(root)&&snapshot.activeAvatarRoots==1;
-            unsigned bones=unsigned(actor.boneCount);
-            for (int j=i+1;j<snapshot.actorCount;++j) if (snapshot.animators[snapshot.actors[j].animator].node==root&&snapshot.actors[j].head==actor.head) bones=std::max(bones,unsigned(snapshot.actors[j].boneCount));
-            catalog.push_back({name,name,bones,active,selectable});
+        if (!snapshot.complete) {
+            ui::MarkCatalogStale();
+            const auto catalog=ui::Read();
+            report << "[UI_RIG_CATALOG] snapshot=INCOMPLETE action=KEEP_LAST rows=" << catalog.rigs.size()
+                << " stale=" << catalog.catalogStale << " generation=" << catalog.generation << '\n';
+        } else {
+            std::vector<ui::Rig> catalog;
+            for (int i=0;i<snapshot.actorCount;++i) {
+                const auto& actor=snapshot.actors[i];const auto root=snapshot.animators[actor.animator].node;
+                if (root<0) continue;
+                bool previous=false;
+                for (int j=0;j<i;++j) previous|=snapshot.animators[snapshot.actors[j].animator].node==root&&snapshot.actors[j].head==actor.head;
+                if (previous) continue;
+                const auto& node=snapshot.nodes[root];const std::wstring name(node.name,size_t(node.nameLength));
+                const auto active=node.active&&snapshot.nodes[actor.body].active&&snapshot.nodes[actor.head].active;
+                const auto selectable=active&&PlayerBranch(root);
+                unsigned bones=unsigned(actor.boneCount);
+                for (int j=i+1;j<snapshot.actorCount;++j) if (snapshot.animators[snapshot.actors[j].animator].node==root&&snapshot.actors[j].head==actor.head) bones=std::max(bones,unsigned(snapshot.actors[j].boneCount));
+                catalog.push_back({name,name,bones,active,selectable});
+            }
+            std::stable_sort(catalog.begin(),catalog.end(),[](const ui::Rig& a,const ui::Rig& b){return a.selectable>b.selectable;});
+            const auto rows=catalog.size();
+            ui::PublishCatalog(std::move(catalog));
+            const auto published=ui::Read();
+            report << "[UI_RIG_CATALOG] snapshot=COMPLETE action=" << (published.catalogStale?"KEEP_LAST":"REPLACE")
+                << " rows=" << published.rigs.size() << " fresh_rows=" << rows
+                << " stale=" << published.catalogStale << " generation=" << published.generation << '\n';
         }
-        std::stable_sort(catalog.begin(),catalog.end(),[](const ui::Rig& a,const ui::Rig& b){return a.selectable>b.selectable;});
-        ui::PublishCatalog(std::move(catalog));
     }
     report << "[RIG] complete=" << snapshot.complete << " nodes=" << snapshot.nodeCount << " rig_nodes=" << snapshot.selectedNodeCount << " bones=" << snapshot.boneCount
         << " parent_child_edges_checked=" << snapshot.checkedEdges << " core_chains=" << snapshot.coreChains << " failure_step=" << snapshot.failureStep
