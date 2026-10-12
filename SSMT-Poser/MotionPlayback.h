@@ -6,6 +6,7 @@ namespace poser {
 enum class MotionStopDisposition : unsigned {
     None,
     Restored,
+    RestoredInactive,
     OwnerInactiveSkipped,
     IdentityLost,
     RestoreFailed,

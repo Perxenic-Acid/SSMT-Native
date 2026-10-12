@@ -267,6 +267,7 @@ const char* OwnerFailureName(OwnerFailure failure) {
 const char* StopDispositionName(MotionStopDisposition disposition) {
     switch (disposition) {
     case MotionStopDisposition::Restored: return "RESTORED";
+    case MotionStopDisposition::RestoredInactive: return "RESTORED_INACTIVE_OWNER";
     case MotionStopDisposition::OwnerInactiveSkipped: return "OWNER_INACTIVE_SKIPPED";
     case MotionStopDisposition::IdentityLost: return "IDENTITY_LOST";
     case MotionStopDisposition::RestoreFailed: return "RESTORE_FAILED";
@@ -943,17 +944,11 @@ bool Stop() {
             playback.stopDisposition=MotionStopDisposition::IdentityLost;
             playback.fault=0;
             restored=false;
-        } else if (!playback.ownerActiveAtStop) {
-            // Deactivation is a lifecycle boundary, not an IK or root-motion
-            // failure. The object may be hidden for a scene transition or be
-            // queued for destruction; writing the old pose here is unsafe.
-            playback.stopDisposition=MotionStopDisposition::OwnerInactiveSkipped;
-            playback.fault=0;
-            playback.restore=false;
-            playback.captured=false;
-            status=0;
-            return true;
         }
+        // OwnerIdentity(false) has already validated the rooted managed objects
+        // and native Transform pointers. An inactive GameObject is therefore
+        // still the original actor; restore its local handoff before releasing
+        // it so a switch cannot leave the last VMD pose behind.
         for (unsigned i=0;restored && i<playback.boneCount;++i) if (playback.bones[i].touched) {
             auto& bone=playback.bones[i]; Quaternion after{};
             const auto& handoff=bone.nativeHandoffValid?bone.nativeHandoffRotation:bone.restoreRotation;
@@ -1012,7 +1007,9 @@ bool Stop() {
         playback.restore=restored;
         if (restored) playback.captured=false;
         if (ownerIdentityValid)
-            playback.stopDisposition=restored?MotionStopDisposition::Restored:MotionStopDisposition::RestoreFailed;
+            playback.stopDisposition=restored
+                ? (playback.ownerActiveAtStop?MotionStopDisposition::Restored:MotionStopDisposition::RestoredInactive)
+                : (playback.ownerActiveAtStop?MotionStopDisposition::RestoreFailed:MotionStopDisposition::OwnerInactiveSkipped);
     }
     status=restored?0:3;
     return restored;

@@ -837,14 +837,20 @@ bool RunMotionSession(GenshinNativeRuntime& runtime,HANDLE stop,HMODULE module,W
                 ReportMotionAB(report);
                 const auto stopOutcome=MotionStopOutcome();
                 const char* stopName=stopOutcome==MotionStopDisposition::Restored?"RESTORED":
+                    stopOutcome==MotionStopDisposition::RestoredInactive?"RESTORED_INACTIVE_OWNER":
                     stopOutcome==MotionStopDisposition::OwnerInactiveSkipped?"OWNER_INACTIVE_SKIPPED":
                     stopOutcome==MotionStopDisposition::IdentityLost?"IDENTITY_LOST":
                     stopOutcome==MotionStopDisposition::RestoreFailed?"RESTORE_FAILED":"NOT_CAPTURED";
                 report << "motion_stop=" << stopName << " dispatch=" << (passed?"OK":"FAILED")
                     << " prior_status=" << prior << '\n'; report.flush();
-                if (stopOutcome==MotionStopDisposition::OwnerInactiveSkipped ||
+                if (stopOutcome==MotionStopDisposition::RestoredInactive ||
+                    stopOutcome==MotionStopDisposition::OwnerInactiveSkipped ||
                     stopOutcome==MotionStopDisposition::IdentityLost) {
-                    report << "motion_restore=SKIPPED_STALE_OR_INACTIVE_OWNER; old_rig=RELEASE_ONLY; rescan=1\n";
+                    report << "motion_restore="
+                        << (stopOutcome==MotionStopDisposition::RestoredInactive
+                            ? "RESTORED_INACTIVE_OWNER"
+                            : "SKIPPED_STALE_OR_INACTIVE_OWNER")
+                        << "; old_rig=RELEASE_ONLY; rescan=1\n";
                     clearStaleTarget("STOP_INACTIVE");
                     staleActorRescan=true; rescan=true; passed=true; break;
                 }
