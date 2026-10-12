@@ -10,8 +10,10 @@
 #include <fstream>
 #include <ostream>
 #include <string>
+#include <string_view>
 
 namespace poser {
+namespace live_detail { bool ValidateArray(uintptr_t array, uintptr_t elementClass, uint64_t& length); }
 namespace {
 template<class T> bool Read(uintptr_t address, T& value) {
     SIZE_T count = 0;
@@ -59,18 +61,92 @@ struct Item {
     bool isHuman = false, humanRead = false, bonesValid = false;
     std::array<Bone, 512> bones;
 };
+struct GroundCandidate {
+    const char* namespaze = "";
+    const char* name = "";
+    uintptr_t klass = 0, descriptor = 0;
+    uintptr_t reflection = 0, array = 0, arrayClass = 0, elementDescriptor = 0;
+    uint64_t count = 0;
+    uint64_t bounds = UINT64_MAX, length = 0;
+    uint32_t elementMetadataId = UINT32_MAX, expectedMetadataId = UINT32_MAX;
+    uint32_t handles[2]{};
+    uint8_t arrayType = 0;
+    int stage = 0;
+    bool resolved = false, read = false;
+    bool hierarchyValid = false, derivesObject = false, derivesComponent = false;
+    std::string baseChain;
+    unsigned sampleCount = 0;
+    std::array<uintptr_t, 8> sampleObjects{};
+    std::array<std::string, 8> sampleNames{};
+    unsigned hierarchyMatches = 0, hierarchySampleCount = 0;
+    std::array<uintptr_t, 8> hierarchyObjects{};
+    std::array<unsigned, 8> hierarchyDepth{};
+    std::array<std::string, 8> hierarchyNames{};
+    unsigned subtreeMatches = 0, subtreeSampleCount = 0;
+    std::array<uintptr_t, 8> subtreeObjects{};
+    std::array<std::string, 8> subtreeNames{};
+};
+struct ComponentLayer {
+    uintptr_t transform = 0, gameObject = 0;
+    uint64_t componentCount = 0;
+    unsigned depth = 0;
+    int stage = 0;
+    int nameLength = 0;
+    wchar_t name[128]{};
+};
+struct ComponentClassCount {
+    uintptr_t klass = 0;
+    uint32_t count = 0;
+};
+std::string Utf8(const wchar_t* text, int length);
+bool ReadName(uintptr_t object, wchar_t (&name)[128], int& length);
+bool Alive(uintptr_t object, uintptr_t expected, uintptr_t& native);
 struct Job {
     NativeCallContext context;
     uintptr_t find = 0, findMethod = 0, child = 0, childMethod = 0;
     uintptr_t transform = 0, transformMethod = 0, gameObject = 0, gameObjectMethod = 0, name = 0, nameMethod = 0;
-    uintptr_t transformClass = 0, gameObjectClass = 0, reflectionClass = 0;
+    uintptr_t transformClass = 0, gameObjectClass = 0, componentClass = 0, objectClass = 0, reflectionClass = 0;
+    NativeMethod parent, components;
+    uint32_t componentTypeHandle = 0, componentScanHandles[4]{};
+    uintptr_t componentScanAnimator = 0;
+    unsigned componentLayerCount = 0;
+    std::array<ComponentLayer, 24> componentLayers{};
+    bool componentScanRead = false;
+    uintptr_t componentSubtreeAnimator = 0, componentSubtreeRoot = 0;
+    uint64_t componentSubtreeComponentCount = 0;
+    unsigned componentSubtreeTypeCount = 0;
+    std::array<ComponentClassCount, 256> componentSubtreeTypes{};
+    std::string componentSubtreeRootName;
+    bool componentSubtreeRead = false, componentSubtreeFresh = false, componentSubtreeTruncated = false;
+    bool classParentLayoutValidated = false;
     NativeMethod human, rootBone, bones, mesh;
+    NativeMethod fbikEffectorCount, fbikChainCount, fbikCheckPass;
+    NativeMethod fbikChainElementCount;
+    bool fbikMethodsReady = false;
+    bool fbikChainElementMethodReady = false;
+    bool fbikProbeEnabled = false;
+    bool fbikRead = false, fbikPass = false;
+    unsigned fbikReadFailure = 0;
+    DWORD fbikReadFault = 0;
+    int fbikEffectors = -1, fbikChains = -1;
+    std::array<int, 64> fbikElementCounts{};
+    unsigned fbikElementRead = 0;
     DWORD mainThread = 0, actualThread = 0, fault = 0;
     uintptr_t runtimeThread = 0;
     unsigned step = 0;
     unsigned mode = 0;
     bool complete = false;
     std::array<Item, 3> items;
+    std::array<GroundCandidate, 8> groundCandidates{{
+        {"MoleMole", "FootLockDragonIK"},
+        {"MoleMole", "AnimageIKRig"},
+        {"MoleMole", "EntityActor"},
+        {"MoleMole", "VCAnimatorMove"},
+        {"MoleMole", "IdleRig"},
+        {"", "QuadrupedsGoundIK"},
+        {"MoleMole", "MonoAnimationIKEventHelper"},
+        {"VerletEngine", "DynamicBoneArray"},
+    }};
 };
 // 任务数据常驻插件；各次 callback 只执行有界只读任务，不跨帧保留 managed 引用。
 Job job;
@@ -78,10 +154,315 @@ std::atomic<unsigned> state{0}, active{0};
 UINT dispatchMessage = 0;
 using Getter = uintptr_t (*)(uintptr_t, uintptr_t);
 using IntGetter = int (*)(uintptr_t, uintptr_t);
+using IndexedIntGetter = int (*)(uintptr_t, int, uintptr_t);
 using Factory = uintptr_t (*)(uintptr_t);
 using NewHandle = uint32_t (*)(uintptr_t, bool);
 using TargetHandle = uintptr_t (*)(uint32_t);
 using FreeHandle = void (*)(uint32_t);
+
+bool ReadFBIKCounts(uintptr_t animator) {
+    if (!animator || !job.fbikMethodsReady || !job.fbikProbeEnabled) return false;
+    const auto count = reinterpret_cast<IntGetter>(job.fbikEffectorCount.entry)(animator, job.fbikEffectorCount.descriptor);
+    const auto chains = reinterpret_cast<IntGetter>(job.fbikChainCount.entry)(animator, job.fbikChainCount.descriptor);
+    const auto pass = reinterpret_cast<bool (*)(uintptr_t, uintptr_t)>(job.fbikCheckPass.entry)(animator, job.fbikCheckPass.descriptor);
+    if (count < 0 || count > 128 || chains < 0 || chains > 64) return false;
+    job.fbikEffectors = count;
+    job.fbikChains = chains;
+    job.fbikPass = pass;
+    job.fbikElementCounts.fill(-1);
+    job.fbikElementRead = 0;
+    if (job.fbikChainElementMethodReady && chains > 0) {
+        const auto elementCount = reinterpret_cast<IndexedIntGetter>(job.fbikChainElementCount.entry);
+        for (int chain = 0; chain < chains && chain < static_cast<int>(job.fbikElementCounts.size()); ++chain) {
+            // The managed signature is GetFBIKChainElementCount(int chain).
+            // Il2Cpp's generated wrapper keeps the instance first, then the
+            // user argument, and the MethodInfo descriptor last. Passing the
+            // descriptor as the chain index can return plausible zero values
+            // while corrupting the probe's read-only evidence.
+            const auto elementCountValue = elementCount(animator, chain, job.fbikChainElementCount.descriptor);
+            if (elementCountValue < 0 || elementCountValue > 128) return false;
+            job.fbikElementCounts[chain] = elementCountValue;
+            ++job.fbikElementRead;
+        }
+    }
+    job.fbikRead = true;
+    return true;
+}
+DWORD ReadFBIKCountsGuarded(uintptr_t animator, bool& read) {
+    __try {
+        read = ReadFBIKCounts(animator);
+        return 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        read = false;
+        return GetExceptionCode();
+    }
+}
+bool ReadCandidateIdentityRaw(uintptr_t object, wchar_t* result, int& length) {
+    __try {
+        if (!object) return false;
+        const auto gameObject = reinterpret_cast<Getter>(job.gameObject)(object, job.gameObjectMethod);
+        if (!gameObject) return false;
+        const auto text = reinterpret_cast<Getter>(job.name)(gameObject, job.nameMethod);
+        uintptr_t stringClass = 0;
+        if (!Read(text, stringClass) || !Name(stringClass, "String") ||
+            !Read(text + 0x10, length) || length < 0 || length >= 128) return false;
+        for (int j = 0; j < length; ++j) if (!Read(text + 0x14 + size_t(j) * 2, result[j])) return false;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+void ReleaseCandidateRoots(GroundCandidate& candidate) {
+    for (auto& handle : candidate.handles) {
+        if (handle) {
+            reinterpret_cast<FreeHandle>(job.context.handleFree)(handle);
+            handle = 0;
+        }
+    }
+}
+const char* GroundStageName(int stage) {
+    switch (stage) {
+    case 1: return "TYPE_FACTORY_NULL";
+    case 2: return "REFLECTION_TYPE_INVALID";
+    case 3: return "REFLECTION_HANDLE_INVALID";
+    case 4: return "FIND_OBJECTS_NULL";
+    case 5: return "ARRAY_HANDLE_INVALID";
+    case 6: return "ARRAY_HEADER_UNREADABLE";
+    case 7: return "ARRAY_VALIDATION_FAILED";
+    case 8: return "OK";
+    case 9: return "NOT_UNITY_OBJECT";
+    default: return "NOT_RUN";
+    }
+}
+bool RootCandidateObject(uintptr_t object, uint32_t& handle) {
+    if (!object) return false;
+    handle = reinterpret_cast<NewHandle>(job.context.handleNew)(object, false);
+    return handle && (handle >> 26) == 2 &&
+        reinterpret_cast<TargetHandle>(job.context.handleTarget)(handle) == object;
+}
+void ReleaseGcHandle(uint32_t& handle) {
+    if (!handle) return;
+    reinterpret_cast<FreeHandle>(job.context.handleFree)(handle);
+    handle = 0;
+}
+// Candidate component census only. Do not invoke candidate methods: their
+// signatures and ownership are game-specific; presence/count is sufficient to
+// select the next verified path without mutating animation or network state.
+bool ReadGroundCandidateCounts() {
+    for (auto& candidate : job.groundCandidates) {
+        ReleaseCandidateRoots(candidate);
+        candidate.count = 0;
+        candidate.read = false;
+        candidate.stage = 0;
+        candidate.reflection = candidate.array = candidate.arrayClass = candidate.elementDescriptor = 0;
+        candidate.bounds = UINT64_MAX; candidate.length = 0;
+        candidate.arrayType = 0; candidate.elementMetadataId = candidate.expectedMetadataId = UINT32_MAX;
+        candidate.sampleCount = 0;
+        candidate.sampleObjects.fill(0);
+        for (auto& name : candidate.sampleNames) name.clear();
+        if (!candidate.resolved || !candidate.descriptor) continue;
+        candidate.stage = 1;
+        const auto reflection = reinterpret_cast<Factory>(job.context.reflectionType)(candidate.descriptor);
+        candidate.reflection = reflection;
+        if (!reflection) continue;
+        candidate.stage = 2;
+        if (!live_detail::ValidateReflection(reflection, job.reflectionClass, candidate.descriptor)) continue;
+        candidate.stage = 3;
+        if (!RootCandidateObject(reflection, candidate.handles[0])) continue;
+        if (candidate.hierarchyValid && !candidate.derivesObject) {
+            candidate.stage = 9;
+            continue;
+        }
+        candidate.stage = 4;
+        const auto array = reinterpret_cast<Getter>(job.find)(reflection, job.findMethod);
+        candidate.array = array;
+        if (!array) continue;
+        candidate.stage = 5;
+        if (!RootCandidateObject(array, candidate.handles[1])) continue;
+        candidate.stage = 6;
+        uintptr_t arrayClass = 0, elementDescriptor = 0, bounds = 0;
+        uint8_t type = 0;
+        uint64_t length = 0;
+        if (!Read(array, arrayClass) || !Read(arrayClass + 0x68 + 0xA, type) ||
+            !Read(arrayClass + 0x68, elementDescriptor) || !Read(array + 0x10, bounds) ||
+            !Read(array + 0x18, length)) continue;
+        candidate.arrayClass = arrayClass; candidate.elementDescriptor = elementDescriptor;
+        candidate.arrayType = type; candidate.bounds = bounds; candidate.length = length;
+        Read(elementDescriptor, candidate.elementMetadataId);
+        Read(candidate.descriptor, candidate.expectedMetadataId);
+        candidate.stage = 7;
+        if (!live_detail::ValidateArray(array, candidate.klass, length)) continue;
+        candidate.stage = 8;
+        candidate.count = length;
+        candidate.read = true;
+        // Keep a small, bounded identity sample. This remains read-only and
+        // lets one session distinguish a global service from the selected actor.
+        for (uint64_t i = 0; i < std::min<uint64_t>(length, 8); ++i) {
+            uintptr_t object = 0, klass = 0;
+            if (!Read(array + 0x20 + i * 8, object) || !Read(object, klass) || klass != candidate.klass) continue;
+            wchar_t sampleBuffer[128]{};
+            int sampleLength = 0;
+            candidate.sampleObjects[candidate.sampleCount] = object;
+            if (candidate.derivesComponent && ReadCandidateIdentityRaw(object, sampleBuffer, sampleLength))
+                candidate.sampleNames[candidate.sampleCount] = Utf8(sampleBuffer, sampleLength);
+            ++candidate.sampleCount;
+            if (candidate.sampleCount == candidate.sampleObjects.size()) break;
+        }
+    }
+    return true;
+}
+bool ReadSelectedComponentHierarchy(uintptr_t animator) {
+    job.componentScanRead = false;
+    job.componentLayerCount = 0;
+    for (auto& candidate : job.groundCandidates) {
+        candidate.hierarchyMatches = candidate.hierarchySampleCount = 0;
+        candidate.hierarchyObjects.fill(0); candidate.hierarchyDepth.fill(0);
+        for (auto& name : candidate.hierarchyNames) name.clear();
+    }
+    if (!animator) return false;
+    job.componentScanAnimator = animator;
+    if (!job.components.entry || !job.parent.entry || !job.componentClass) return false;
+    const auto type = reinterpret_cast<Factory>(job.context.reflectionType)(job.componentClass + 0x68);
+    if (!live_detail::ValidateReflection(type, job.reflectionClass, job.componentClass + 0x68)) return false;
+    if (job.componentTypeHandle) {
+        if (reinterpret_cast<TargetHandle>(job.context.handleTarget)(job.componentTypeHandle) != type) return false;
+    } else if (!RootCandidateObject(type, job.componentTypeHandle)) {
+        return false;
+    }
+    auto transform = reinterpret_cast<Getter>(job.transform)(animator, job.transformMethod);
+    if (!RootCandidateObject(transform, job.componentScanHandles[0])) return false;
+    uintptr_t seen[24]{};
+    bool reachedRoot = false;
+    for (unsigned depth = 0; transform && depth < std::size(seen); ++depth) {
+        for (unsigned i = 0; i < depth; ++i) if (seen[i] == transform) return false;
+        seen[depth] = transform;
+        auto& layer = job.componentLayers[job.componentLayerCount++];
+        layer = ComponentLayer{}; layer.depth = depth; layer.transform = transform;
+        uintptr_t native = 0;
+        if (!Alive(transform, job.transformClass, native)) { layer.stage = 1; return false; }
+        layer.gameObject = reinterpret_cast<Getter>(job.gameObject)(transform, job.gameObjectMethod);
+        if (!layer.gameObject) { layer.stage = 2; return false; }
+        if (!RootCandidateObject(layer.gameObject, job.componentScanHandles[1])) { layer.stage = 3; return false; }
+        if (!ReadName(layer.gameObject, layer.name, layer.nameLength)) { layer.stage = 4; return false; }
+        const auto array = reinterpret_cast<uintptr_t (*)(uintptr_t, uintptr_t, bool, bool, bool, bool, uintptr_t, uintptr_t)>(job.components.entry)
+            (layer.gameObject, type, true, false, true, false, 0, job.components.descriptor);
+        if (!array) { layer.stage = 5; ReleaseGcHandle(job.componentScanHandles[1]); return false; }
+        if (!RootCandidateObject(array, job.componentScanHandles[2])) { layer.stage = 6; return false; }
+        uint64_t length = 0;
+        if (!live_detail::ValidateArray(array, job.componentClass, length)) { layer.stage = 7; return false; }
+        layer.stage = 8; layer.componentCount = length;
+        for (uint64_t i = 0; i < std::min<uint64_t>(length, 512); ++i) {
+            uintptr_t component = 0, componentKlass = 0;
+            if (!Read(array + 0x20 + i * 8, component) || !Read(component, componentKlass)) continue;
+            for (auto& candidate : job.groundCandidates) {
+                if (!candidate.resolved || componentKlass != candidate.klass) continue;
+                ++candidate.hierarchyMatches;
+                if (candidate.hierarchySampleCount == candidate.hierarchyObjects.size()) continue;
+                auto sample = candidate.hierarchySampleCount++;
+                candidate.hierarchyObjects[sample] = component;
+                candidate.hierarchyDepth[sample] = depth;
+                wchar_t objectName[128]{}; int objectNameLength = 0;
+                if (ReadCandidateIdentityRaw(component, objectName, objectNameLength))
+                    candidate.hierarchyNames[sample] = Utf8(objectName, objectNameLength);
+            }
+        }
+        ReleaseGcHandle(job.componentScanHandles[2]);
+        ReleaseGcHandle(job.componentScanHandles[1]);
+        const auto parent = reinterpret_cast<Getter>(job.parent.entry)(transform, job.parent.descriptor);
+        if (!parent) { layer.stage = 9; reachedRoot = true; break; }
+        if (!RootCandidateObject(parent, job.componentScanHandles[3])) return false;
+        ReleaseGcHandle(job.componentScanHandles[0]);
+        job.componentScanHandles[0] = job.componentScanHandles[3];
+        job.componentScanHandles[3] = 0;
+        transform = parent;
+    }
+    if (transform && !reachedRoot) return false;
+    job.componentScanRead = true;
+    return true;
+}
+
+bool ReadSelectedComponentSubtree(uintptr_t animator) {
+    job.componentSubtreeFresh = false;
+    if (!animator) return false;
+    if (job.componentSubtreeRead && job.componentSubtreeAnimator == animator) return true;
+
+    job.componentSubtreeRead = false;
+    job.componentSubtreeAnimator = 0;
+    job.componentSubtreeRoot = 0;
+    job.componentSubtreeComponentCount = 0;
+    job.componentSubtreeTypeCount = 0;
+    job.componentSubtreeRootName.clear();
+    job.componentSubtreeTruncated = false;
+    job.componentSubtreeTypes.fill(ComponentClassCount{});
+    for (auto& candidate : job.groundCandidates) {
+        candidate.subtreeMatches = candidate.subtreeSampleCount = 0;
+        candidate.subtreeObjects.fill(0);
+        for (auto& name : candidate.subtreeNames) name.clear();
+    }
+    for (auto& handle : job.componentScanHandles) ReleaseGcHandle(handle);
+    if (!job.components.entry || !job.componentClass || !job.transform || !job.gameObject) return false;
+
+    const auto type = reinterpret_cast<Factory>(job.context.reflectionType)(job.componentClass + 0x68);
+    if (!live_detail::ValidateReflection(type, job.reflectionClass, job.componentClass + 0x68)) return false;
+    if (job.componentTypeHandle) {
+        if (reinterpret_cast<TargetHandle>(job.context.handleTarget)(job.componentTypeHandle) != type) return false;
+    } else if (!RootCandidateObject(type, job.componentTypeHandle)) {
+        return false;
+    }
+
+    const auto transform = reinterpret_cast<Getter>(job.transform)(animator, job.transformMethod);
+    uintptr_t native = 0;
+    if (!Alive(transform, job.transformClass, native) || !RootCandidateObject(transform, job.componentScanHandles[0])) return false;
+    const auto gameObject = reinterpret_cast<Getter>(job.gameObject)(transform, job.gameObjectMethod);
+    if (!gameObject || !RootCandidateObject(gameObject, job.componentScanHandles[1])) return false;
+    wchar_t rootName[128]{};
+    int rootNameLength = 0;
+    if (!ReadName(gameObject, rootName, rootNameLength)) return false;
+
+    const auto array = reinterpret_cast<uintptr_t (*)(uintptr_t, uintptr_t, bool, bool, bool, bool, uintptr_t, uintptr_t)>(job.components.entry)
+        (gameObject, type, true, true, true, false, 0, job.components.descriptor);
+    if (!array || !RootCandidateObject(array, job.componentScanHandles[2])) return false;
+    uint64_t length = 0;
+    if (!live_detail::ValidateArray(array, job.componentClass, length)) return false;
+
+    constexpr uint64_t MaxSubtreeComponents = 4096;
+    job.componentSubtreeRoot = gameObject;
+    job.componentSubtreeRootName = Utf8(rootName, rootNameLength);
+    job.componentSubtreeComponentCount = length;
+    job.componentSubtreeTruncated = length > MaxSubtreeComponents;
+    for (uint64_t i = 0; i < std::min(length, MaxSubtreeComponents); ++i) {
+        uintptr_t component = 0, klass = 0;
+        if (!Read(array + 0x20 + i * sizeof(uintptr_t), component) || !component || !Read(component, klass) || !klass) continue;
+        unsigned typeIndex = 0;
+        while (typeIndex < job.componentSubtreeTypeCount && job.componentSubtreeTypes[typeIndex].klass != klass) ++typeIndex;
+        if (typeIndex == job.componentSubtreeTypeCount) {
+            if (job.componentSubtreeTypeCount == job.componentSubtreeTypes.size()) {
+                job.componentSubtreeTruncated = true;
+            } else {
+                job.componentSubtreeTypes[typeIndex].klass = klass;
+                ++job.componentSubtreeTypeCount;
+            }
+        }
+        if (typeIndex < job.componentSubtreeTypeCount && job.componentSubtreeTypes[typeIndex].count < UINT32_MAX)
+            ++job.componentSubtreeTypes[typeIndex].count;
+        for (auto& candidate : job.groundCandidates) {
+            if (!candidate.resolved || klass != candidate.klass) continue;
+            ++candidate.subtreeMatches;
+            if (candidate.subtreeSampleCount == candidate.subtreeObjects.size()) continue;
+            const auto sample = candidate.subtreeSampleCount++;
+            candidate.subtreeObjects[sample] = component;
+            wchar_t objectName[128]{};
+            int objectNameLength = 0;
+            if (ReadCandidateIdentityRaw(component, objectName, objectNameLength))
+                candidate.subtreeNames[sample] = Utf8(objectName, objectNameLength);
+        }
+    }
+    for (auto& handle : job.componentScanHandles) ReleaseGcHandle(handle);
+    job.componentSubtreeAnimator = animator;
+    job.componentSubtreeRead = true;
+    job.componentSubtreeFresh = true;
+    return true;
+}
 
 bool Root(Item& item, unsigned slot, uintptr_t object) {
     if (!object) return false;
@@ -211,11 +592,25 @@ bool ExecuteGuarded() {
                 }
             }
         }
-        job.step = 14;
         const auto& smr = job.items[1];
         const auto& animator = job.items[2];
+        job.step = 14;
+        ReadGroundCandidateCounts();
         if (smr.liveValid && smr.bonesValid && smr.bonesLength && !CaptureRig(smr.object, smr.transform, smr.bonesArray,
             smr.bonesLength, smr.array, smr.length, animator.array, animator.length)) return false;
+        const auto selectedAnimator = SelectedRigAnimator();
+        if (selectedAnimator) {
+            ReadSelectedComponentHierarchy(selectedAnimator);
+            ReadSelectedComponentSubtree(selectedAnimator);
+        }
+        if (job.fbikProbeEnabled && job.fbikMethodsReady) {
+            if (!selectedAnimator) job.fbikReadFailure=1;
+            else {
+                job.fbikReadFault=ReadFBIKCountsGuarded(selectedAnimator,job.fbikRead);
+                if (job.fbikReadFault) job.fbikReadFailure=3;
+                else if (!job.fbikRead) job.fbikReadFailure=2;
+            }
+        }
         job.step = 8;
         job.complete = true;
         return true;
@@ -235,6 +630,9 @@ void ReleaseGuarded() {
             if (handle) { reinterpret_cast<FreeHandle>(job.context.handleFree)(handle); ++item.released; }
             handle = 0;
         }
+        for (auto& candidate : job.groundCandidates) ReleaseCandidateRoots(candidate);
+        ReleaseGcHandle(job.componentTypeHandle);
+        for (auto& handle : job.componentScanHandles) ReleaseGcHandle(handle);
     } __except (EXCEPTION_EXECUTE_HANDLER) { job.fault = GetExceptionCode(); job.complete = false; }
 }
 LRESULT CALLBACK Dispatch(int code, WPARAM wParam, LPARAM lParam) {
@@ -294,16 +692,42 @@ bool DispatchJob(HANDLE stop,HMODULE module,Window window,std::ostream& report,b
 std::string Utf8(const wchar_t* text,int length);
 bool RunMotionSession(GenshinNativeRuntime& runtime,HANDLE stop,HMODULE module,Window window,std::ostream& report,const std::filesystem::path& directory,bool& rescan,std::wstring& requestedName) {
     rescan=false;
+    bool staleActorRescan=false;
+    const auto clearStaleTarget=[&](const char* stage) {
+        const auto previous=requestedName.empty()?std::string("<auto-player-branch>"):Utf8(requestedName.c_str(),int(requestedName.size()));
+        requestedName.clear();
+        SetRigWriteTarget({});
+        report << "[RIG_TARGET] action=CLEAR stage=" << stage << " target_before=" << previous
+            << " target_after=<auto-player-branch> requested_actor_cleared=1\n";
+        report << "motion_rescan=STALE_ACTOR_TARGET_CLEARED stage=" << stage << " previous_actor=" << previous << " next=AUTO_PLAYER_BRANCH\n";
+    };
     if (!MotionRigArmed()) { report << "motion_session=NOT_ARMED; reason=Actor_or_rig_gate\n"; return false; }
     // 初始化只读 reference；失败后仍走统一的恢复 / roots 清理，禁止退回当前动画基准。
     bool passed=ConfigureMotionAB(directory,report)&&InitializeMotionReference(runtime,job.items[1].meshClass,job.mesh,report);
-    if (passed) {job.mode=9;passed=DispatchJob(stop,module,window,report,true);ReportMotion(report);ExportMotionReferences(directory,report);}
+    if (passed) {
+        job.mode=9;
+        passed=DispatchJob(stop,module,window,report,true);
+        ReportMotion(report);
+        if (passed) ExportMotionReferences(directory,report);
+        else if (!job.fault && MotionIdentityRejected()) {
+            report << "motion_reference=REJECTED_STALE_RIG; rescan=1; character_writes=NONE\n";
+            report.flush();
+            clearStaleTarget("REFERENCE");
+            UnloadMotionClip();
+            rescan=true;
+            if (ui::Enabled()) {
+                ui::Bound({},0);
+                ui::State(L"角色在校验期间已切换，正在重新扫描；没有写入动作。",false,false,false);
+            }
+            return true;
+        }
+    }
     if (passed) passed=InstallAnimationReturnProbe(runtime,stop,report);
     if (passed) passed=ConfigureMotionAB(directory,report);
     report << "phase=" << (passed?"MOTION_COMMANDS_READY":"MOTION_REFERENCE_BLOCKED") << "; NUMPAD1=load_or_reload_and_play; NUMPAD2=stop_and_restore; NUMPAD3=finish_session; NumLock=ON; playback_control=MANUAL\n";
     report << "motion_path_file=motion_path.txt; command_flags=motion_play.flag,motion_stop.flag,motion_exit.flag\n"; report.flush();
     report << "AB_controls=NUMPAD6_Legacy; NUMPAD7_Basis; NUMPAD8_cycle_Identity_X_Y_Z_Frame0_Frame30_Frame120; selection_requires_STOPPED; start=NUMPAD1; restore=NUMPAD2\n";report.flush();
-    if (ui::Enabled()) ui::State(passed?L"骨架已就绪。选择 VMD 后载入，再点击播放。":L"静态绑定姿态校验未通过，禁止播放。",passed,false,false,!passed);
+    if (ui::Enabled()) ui::State(passed?L"骨架已就绪。选择 VMD 后载入，再点击播放。":L"静态绑定姿态校验未通过，已禁用写入；可刷新或重新绑定。",passed,false,false,!passed);
     auto consume=[&](const wchar_t* name) {
         const auto path=directory/name;
         if (GetFileAttributesW(path.c_str())==INVALID_FILE_ATTRIBUTES) return false;
@@ -314,7 +738,7 @@ bool RunMotionSession(GenshinNativeRuntime& runtime,HANDLE stop,HMODULE module,W
     uint64_t nextProgress=0;
     unsigned previousStage=UINT_MAX;
     try {
-        while (passed && WaitForSingleObject(stop,25)!=WAIT_OBJECT_0) {
+        while (WaitForSingleObject(stop,25)!=WAIT_OBJECT_0) {
             DWORD foreground=0; GetWindowThreadProcessId(GetForegroundWindow(),&foreground);
             const auto inGame=foreground==GetCurrentProcessId()&&GetForegroundWindow()==window.hwnd;
             for(unsigned i=0;i<3;++i) {
@@ -333,8 +757,21 @@ bool RunMotionSession(GenshinNativeRuntime& runtime,HANDLE stop,HMODULE module,W
                 if (command.kind==ui::CommandKind::Refresh||command.kind==ui::CommandKind::BindActor||command.kind==ui::CommandKind::ReleaseRig) {
                     if (MotionStatus()==1) {ui::State(L"请先停止动作，再切换或刷新骨架。",true,true,true);continue;}
                     if (command.kind==ui::CommandKind::BindActor&&!ui::ValidateSelection(command)) {ui::State(L"骨架列表已更新或目标不可绑定，请重新选择。",true,ui::Read().loaded,false);continue;}
-                    if (command.kind==ui::CommandKind::BindActor) requestedName=command.text;
-                    if (command.kind==ui::CommandKind::ReleaseRig) requestedName.clear();
+                    if (command.kind==ui::CommandKind::BindActor) {
+                        requestedName=command.text;
+                        report << "[RIG_TARGET] action=SET stage=MOTION_SESSION target_after="
+                            << Utf8(requestedName.c_str(),int(requestedName.size())) << " source=USER_BIND\n";
+                    }
+                    if (command.kind==ui::CommandKind::ReleaseRig) clearStaleTarget("RELEASE");
+                    if (command.kind==ui::CommandKind::Refresh) {
+                        if (!requestedName.empty()) {
+                            report << "[UI_RIG_REFRESH] target_cleared=1 previous_actor="
+                                << Utf8(requestedName.c_str(),int(requestedName.size())) << " reason=MANUAL_REFRESH\n";
+                        }
+                        requestedName.clear();
+                        SetRigWriteTarget({});
+                        report << "[UI_RIG_REFRESH] accepted=1 stage=MOTION_SESSION target_cleared=1 scan_follows=1\n";
+                    }
                     rescan=true;break;
                 }
                 playCommand|=command.kind==ui::CommandKind::Play;
@@ -346,7 +783,8 @@ bool RunMotionSession(GenshinNativeRuntime& runtime,HANDLE stop,HMODULE module,W
             }
             if (stopCommand) {playCommand=false;loadOnly=false;startOnly=false;unload=false;}
             previousPlay=play; previousStop=stopKey; previousExit=finish;
-            if (exitCommand) {if (ui::Enabled()) {rescan=true;requestedName.clear();}break;}
+            if (exitCommand) {if (ui::Enabled()) {rescan=true;clearStaleTarget("EXIT");}break;}
+            if (!passed) continue;
             if (stopCommand || MotionStatus()==2 || MotionStatus()==3 || playCommand || loadOnly || unload) {
                 const auto prior=MotionStatus();
                 DisableMotionWrites(); job.mode=8;
@@ -354,8 +792,16 @@ bool RunMotionSession(GenshinNativeRuntime& runtime,HANDLE stop,HMODULE module,W
                 ReportMotion(report);
                 ReportMotionAB(report);
                 report << "motion_stop=" << (passed?"RESTORED":"FAILED") << " prior_status=" << prior << '\n'; report.flush();
-                if (ui::Enabled()) ui::State(passed?L"动作已停止，现场姿态已恢复。":L"恢复校验失败，请查看日志。",passed,ui::Read().loaded,false,!passed);
-                if (prior==3) { passed=false; break; }
+                if (prior==3) {
+                    if (!job.fault && MotionIdentityRejected()) {
+                        report << "motion_restore=UNAVAILABLE_STALE_ACTOR; old_rig=RELEASE_ONLY; rescan=1\n";
+                        clearStaleTarget("STOP");
+                        staleActorRescan=true; rescan=true; passed=true; break;
+                    }
+                    if (ui::Enabled()) ui::State(L"播放过程异常，已停止写入；请刷新或重新绑定角色。",false,false,false,true);
+                    passed=false; break;
+                }
+                if (ui::Enabled()) ui::State(passed?L"动作已停止，现场姿态已恢复。":L"恢复校验失败；已停止写入，可刷新或重新绑定。",passed,ui::Read().loaded,false,!passed);
             }
             if (unload&&passed) {passed=UnloadMotionClip();if (ui::Enabled()) ui::State(passed?L"动作已载出。骨架保持绑定。":L"动作载出失败。",passed,false,false,!passed);}
             if (((playCommand&&!startOnly)||loadOnly) && passed) {
@@ -380,6 +826,19 @@ bool RunMotionSession(GenshinNativeRuntime& runtime,HANDLE stop,HMODULE module,W
                 if (startOnly&&!ui::Read().loaded) {ui::State(L"请先载入动作文件。",true,false,false);continue;}
                 if(!ConfigureMotionAB(directory,report))continue;
                 job.mode=7; passed=DispatchJob(stop,module,window,report,true);
+                // A character switch can invalidate the managed/native identities
+                // between the scene snapshot and NUMPAD1. Keep the identity gate
+                // strict, but return to the scanner instead of killing the session.
+                // DispatchJob may release the stale rig while unwinding the failed
+                // main-thread call. Use the explicit identity result instead of
+                // MotionRigArmed(), which is expected to be false at this point.
+                if (!passed && !job.fault && MotionStatus()==0 && MotionIdentityRejected()) {
+                    report << "motion_start=REJECTED_STALE_RIG; rescan=1; writes=NONE\n";
+                    clearStaleTarget("START");
+                    rescan=true;
+                    passed=true;
+                    break;
+                }
                 report << "motion_start=" << (passed?"PLAYING":"FAILED") << '\n'; report.flush();
                 if (ui::Enabled()) ui::State(passed?L"正在播放。点击停止可恢复现场姿态。":L"播放校验失败，禁止写入。",passed,ui::Read().loaded,passed,!passed);
             }
@@ -398,9 +857,41 @@ bool RunMotionSession(GenshinNativeRuntime& runtime,HANDLE stop,HMODULE module,W
     if (BoneWriteArmed()) { job.mode=4; passed=DispatchJob(stop,module,window,report,false)&&passed; }
     ReportMotion(report); ReportBoneWrite(report); ReportAnimationReturnProbe(report);
     UnloadMotionClip();
-    if (ui::Enabled()) {ui::Bound({},0);ui::State(passed?L"骨架已释放，等待刷新或重新绑定。":L"动作会话校验失败。已尝试恢复与清理，请重启测试游戏。",false,false,false,!passed);}
-    report << "motion_session=" << (passed?"STOPPED_AND_RELEASED":"FAILED") << "; visual_confirmation=USER_OBSERVATION_REQUIRED\n"; report.flush();
-    return passed;
+    if (ui::Enabled()) {
+        ui::Bound({},0);
+        ui::State(passed?L"骨架已释放，等待刷新或重新绑定。":L"会话校验或恢复失败，动作写入已停止；点击刷新或绑定以重新采集。",false,false,false,!passed);
+    }
+    if (!passed && !rescan && ui::Enabled()) {
+        report << "motion_session=FAILED_WAITING_FOR_USER_RESCAN; writes=DISABLED\n"; report.flush();
+        while (WaitForSingleObject(stop,50)!=WAIT_OBJECT_0) {
+            ui::Command recovery{ui::CommandKind::Refresh};
+            if (!ui::Take(recovery)) continue;
+            if (recovery.kind==ui::CommandKind::Refresh) {
+                report << "[UI_RECOVERY] command=REFRESH generation=" << recovery.generation << '\n';
+                // The failed-session recovery loop runs outside the normal command
+                // path. Clear the requested actor here as well, otherwise the outer
+                // scanner can immediately reapply the stale identity after Refresh.
+                clearStaleTarget("RECOVERY_REFRESH");
+                rescan=true; break;
+            }
+            if (recovery.kind==ui::CommandKind::BindActor) {
+                if (!ui::ValidateSelection(recovery)) {
+                    ui::State(L"角色列表已变化，请先点击刷新，再重新绑定。",false,false,false,true);
+                    continue;
+                }
+                requestedName=recovery.text;
+                report << "[UI_RECOVERY] command=BIND_ACTOR; target=USER_SELECTED\n";
+                rescan=true; break;
+            }
+            if (recovery.kind==ui::CommandKind::ReleaseRig) {
+                clearStaleTarget("RECOVERY_RELEASE");
+                report << "[UI_RECOVERY] command=RELEASE_AND_REFRESH\n";
+                rescan=true; break;
+            }
+        }
+    }
+    report << "motion_session=" << (staleActorRescan?"STALE_ACTOR_RELEASED_AND_RESCAN":rescan?"RESCAN_REQUESTED":passed?"STOPPED_AND_RELEASED":"FAILED") << "; visual_confirmation=USER_OBSERVATION_REQUIRED\n"; report.flush();
+    return passed||rescan;
 }
 bool RunBoneExperiment(GenshinNativeRuntime& runtime,HANDLE stop,HMODULE module,Window window,std::ostream& report,const std::filesystem::path& directory) {
     if (!BoneWriteArmed()) { report << "write_result=NOT_ARMED; reason=target_or_rig_gate\n"; return true; }
@@ -510,6 +1001,9 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
     NativeClass go;
     if (!runtime.FindClass("UnityEngine", "GameObject", go)) return false;
     job.gameObjectClass = go.address;
+    NativeClass componentClass, objectClass;
+    if (runtime.FindClass("UnityEngine", "Component", componentClass)) job.componentClass = componentClass.address;
+    if (runtime.FindClass("UnityEngine", "Object", objectClass)) job.objectClass = objectClass.address;
     NativeMethod find, child, transform, gameObject, name;
     if (!Method(runtime, "Object", "FindObjectsOfType", 1, find) || !Method(runtime, "Transform", "get_childCount", 0, child) ||
         !Method(runtime, "Component", "get_transform", 0, transform) || !Method(runtime, "Component", "get_gameObject", 0, gameObject) ||
@@ -522,6 +1016,19 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
         !Pattern(transform.target, 80, "48 8B 50 40") || !Pattern(gameObject.target, 112, "48 8B 78 40") ||
         !Pattern(name.target, 224, "E9 ?? ?? ?? ??")) {
         report << "blocker=typed callee dataflow\n"; return false;
+    }
+    if (Method(runtime, "Transform", "get_parent", 0, job.parent) && job.componentClass &&
+        Method(runtime, "GameObject", "GetComponentsInternalType", 6, job.components) &&
+        Pattern(job.parent.target, 48, "48 8B 90 A0 00 00 00") &&
+        Pattern(job.components.target, 224, "41 0F B6 E9 45 0F B6 F0") &&
+        Pattern(job.components.target, 224, "40 38 B4 24 80 00 00 00 0F 95 44 24 3A") &&
+        Pattern(job.components.target, 224, "48 8B 00 48 8B 7C 24 78")) {
+        report << "[GROUND_IK_HIERARCHY_METHODS] parent=VERIFIED get_components=VERIFIED includeInactive=SUPPORTED scope=SELECTED_ANIMATOR_ANCESTORS\n";
+        Address(report, "get_components_entry", job.components.entry);
+        Address(report, "get_components_target", job.components.target);
+    } else {
+        job.parent = {}; job.components = {};
+        report << "[GROUND_IK_HIERARCHY_METHODS] parent=UNAVAILABLE get_components=UNAVAILABLE\n";
     }
     const auto enumeration = Relative(find.target + 18, 1, 5);
     if (!Pattern(enumeration, 0x440, "49 8B 17 4A 89 54 39 20")) {
@@ -549,6 +1056,20 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
     job.find = find.entry; job.findMethod = find.descriptor; job.child = child.entry; job.childMethod = child.descriptor;
     job.transform = transform.entry; job.transformMethod = transform.descriptor;
     job.gameObject = gameObject.entry; job.gameObjectMethod = gameObject.descriptor; job.name = name.entry; job.nameMethod = name.descriptor;
+    report << "[GROUND_IK_METHODS] candidate_component_scan=READONLY method_calls=NONE\n";
+    report << "[CLASS_BASE_CHAIN] validated=0 reason=IL2CPP_parent_layout_not_established; hierarchy_component_scan=DEFERRED\n";
+    for (auto& candidate : job.groundCandidates) {
+        NativeClass klass;
+        candidate.resolved = runtime.FindClass(candidate.namespaze, candidate.name, klass);
+        if (candidate.resolved) {
+            candidate.klass = klass.address;
+            candidate.descriptor = klass.address + 0x68;
+        }
+        report << "[GROUND_IK_CANDIDATE] " << candidate.namespaze << "." << candidate.name
+            << " resolved=" << candidate.resolved << " metadataId=" << (candidate.resolved ? klass.metadataId : 0)
+            << " hierarchy_valid=" << candidate.hierarchyValid << " derives_Component=" << candidate.derivesComponent
+            << " derives_Object=" << candidate.derivesObject << " base_chain=" << candidate.baseChain << '\n';
+    }
     if (!Method(runtime, "Animator", "get_isHuman", 0, job.human) ||
         !Method(runtime, "SkinnedMeshRenderer", "get_rootBone", 0, job.rootBone) ||
         !Method(runtime, "SkinnedMeshRenderer", "get_bones", 0, job.bones) ||
@@ -561,6 +1082,29 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
         !Pattern(job.mesh.target, 60, "48 8B C8 E8 ?? ?? ?? ?? 48 8B D0 48 8D 4C 24 30 E8 ?? ?? ?? ?? 48 8B 00") ||
         !Pattern(job.human.target, 48, "48 8B C8 48 83 C4 20 5B E9 ?? ?? ?? ??")) {
         report << "blocker=scene getter callee dataflow\n"; return false;
+    }
+    // FBIK 先只验证无副作用的标量 getter；位置/旋转结构体 ABI 留到实机证据确认后再调用。
+    job.fbikMethodsReady =
+        Method(runtime, "Animator", "GetFBIKEffectorCount", 0, job.fbikEffectorCount) &&
+        Method(runtime, "Animator", "GetFBIKChainCount", 0, job.fbikChainCount) &&
+        Method(runtime, "Animator", "CheckIfInIKPass", 0, job.fbikCheckPass);
+    job.fbikChainElementMethodReady = Method(runtime, "Animator", "GetFBIKChainElementCount", 1, job.fbikChainElementCount);
+    report << "[FBIK_METHODS] available=" << job.fbikMethodsReady
+        << " chain_element_count=" << job.fbikChainElementMethodReady
+        << " position_rotation_calls=DEFERRED_ABI_VALIDATION\n";
+    if (job.fbikMethodsReady) {
+        for (const auto& method : {job.fbikEffectorCount, job.fbikChainCount, job.fbikCheckPass}) {
+            report << "[FBIK_METHOD] " << method.name << " metadataId=" << method.metadataId
+                << " parameterCount=" << unsigned(method.parameterCount) << '\n';
+            Address(report, "entry", method.entry); Address(report, "target", method.target);
+            Address(report, "descriptor", method.descriptor);
+        }
+    }
+    if (job.fbikChainElementMethodReady) {
+        const auto& method = job.fbikChainElementCount;
+        report << "[FBIK_METHOD] " << method.name << " metadataId=" << method.metadataId
+            << " parameterCount=" << unsigned(method.parameterCount) << '\n';
+        Address(report, "entry", method.entry); Address(report, "target", method.target); Address(report, "descriptor", method.descriptor);
     }
     for (const auto& method : {job.human, job.rootBone, job.bones, job.mesh}) {
         report << "[SCENE_GETTER] " << method.name << " metadataId=" << method.metadataId << '\n';
@@ -575,9 +1119,8 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
     if (!dispatchMessage || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
         reinterpret_cast<LPCWSTR>(&Dispatch), &module)) return false;
     const auto marker = directory / L"scene_ready.flag";
-    const bool autoScene=ui::Enabled()||(GetFileAttributesW((directory/L"auto_scene.flag").c_str())!=INVALID_FILE_ATTRIBUTES &&
-        GetFileAttributesW((directory/L"motion_mode.flag").c_str())!=INVALID_FILE_ATTRIBUTES &&
-        GetFileAttributesW((directory/L"target_actor_name.txt").c_str())!=INVALID_FILE_ATTRIBUTES);
+    const bool autoScene=ui::Enabled() ||
+        GetFileAttributesW((directory/L"auto_scene.flag").c_str()) != INVALID_FILE_ATTRIBUTES;
     report << (autoScene?"phase=AUTO_SCENE_DISCOVERY; gate=unique_active_configured_Actor_rig\n":"phase=WAITING_PLAYABLE_SCENE; trigger=foreground_NUMPAD0_or_scene_ready.flag; NumLock=ON\n");
     report.flush();
     const auto sceneDeadline = GetTickCount64() + 15 * 60 * 1000;
@@ -596,26 +1139,46 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
     const auto ikScalePath=directory/L"foot_ik_scale.txt";
     if (GetFileAttributesW(ikScalePath.c_str())!=INVALID_FILE_ATTRIBUTES) {
         float units=0;std::ifstream scaleFile(ikScalePath);scaleFile>>units;
-        if (!ConfigureFootIK(units)) {report << "blocker=foot IK scale\n";return false;}
-        report << "foot_IK=ARMED_PREVIEW; units=" << units << "; root_position_writes=NONE\n";
+        report << "foot_IK=DISABLED_UNVERIFIED_ANALYTIC_SOLVER; requested_units=" << units
+            << "; reason=WAIT_FOR_GAME_NATIVE_IK_PATH\n";
     }
+    job.fbikProbeEnabled = GetFileAttributesW((directory/L"fbik_probe.flag").c_str()) != INVALID_FILE_ATTRIBUTES;
+    report << "fbik_probe=" << (job.fbikProbeEnabled ? "ARMED_READONLY_COUNTS" : "DISABLED_METADATA_ONLY") << '\n';
     if (GetFileAttributesW((directory/L"arm_test.flag").c_str())!=INVALID_FILE_ATTRIBUTES) {
         ConfigureArmExperiment(); report << "write_experiment=LEFT_UPPERARM_60_DEGREES_TWO_CYCLES_USER_REQUESTED\n";
     }
     std::ifstream targetFile(directory/L"target_actor_name.txt",std::ios::binary);
     std::string targetName;
     std::wstring requestedName;
+    bool targetFromFile=false;
+    unsigned targetMisses=0;
+    const auto clearRequestedTarget=[&](const char* stage) {
+        const auto previous=requestedName.empty()?std::string("<auto-player-branch>"):Utf8(requestedName.c_str(),int(requestedName.size()));
+        requestedName.clear();
+        SetRigWriteTarget({});
+        targetFromFile=false;
+        targetMisses=0;
+        report << "[RIG_TARGET] action=CLEAR stage=" << stage << " target_before=" << previous
+            << " target_after=<auto-player-branch> requested_actor_cleared=1 scan_follows=1\n";
+    };
     if (targetFile) std::getline(targetFile,targetName);
     if (!targetName.empty() && targetName.size()<128) {
         const auto size=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,targetName.data(),int(targetName.size()),nullptr,0);
         std::wstring actorName(size,L'\0');
-        if (size && MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,targetName.data(),int(targetName.size()),actorName.data(),size)) {requestedName=actorName;SetRigWriteTarget(actorName);}
+        if (size && MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,targetName.data(),int(targetName.size()),actorName.data(),size)) {requestedName=actorName;SetRigWriteTarget(actorName);targetFromFile=true;}
         report << "requested_actor_name=" << targetName << '\n';
     }
     report << (autoScene?"scene_entry=AUTOMATIC_READONLY_DISCOVERY; character_writes=NONE\n":"scene_entry=USER_CONFIRMED; character_writes=NONE\n");
     if (ui::Enabled()) ui::State(L"自动等待角色场景。可从列表选择当前激活的骨架。",false,false,false);
     for (unsigned attempt = 0; attempt < 120||ui::Enabled(); ++attempt) {
         // 每轮 discovery 有界。UI 超时后等待手动刷新，不持续扫描；新选择仍由下一快照重新核验。
+        const bool fbikProbeRequested = GetFileAttributesW((directory/L"fbik_probe.flag").c_str()) != INVALID_FILE_ATTRIBUTES;
+        if (fbikProbeRequested != job.fbikProbeEnabled) {
+            job.fbikProbeEnabled = fbikProbeRequested;
+            report << "[FBIK_PROBE_FLAG] enabled=" << job.fbikProbeEnabled
+                << " refreshed_before_main_thread_dispatch=1\n";
+            report.flush();
+        }
         if (ui::Enabled()) {
             ui::Command command{ui::CommandKind::Refresh};
             bool received=false;
@@ -627,9 +1190,14 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
             if (received) {
                 if (command.kind==ui::CommandKind::BindActor) {
                     if (!ui::ValidateSelection(command)) {ui::State(L"列表已更新或骨架不可绑定，请重新选择。",false,false,false);continue;}
-                    requestedName=command.text;SetRigWriteTarget(requestedName);attempt=0;
+                    requestedName=command.text;SetRigWriteTarget(requestedName);targetFromFile=false;targetMisses=0;attempt=0;
+                    report << "[RIG_TARGET] action=SET stage=SCENE_DISCOVERY target_after="
+                        << Utf8(requestedName.c_str(),int(requestedName.size())) << " source=USER_BIND\n";
                     ui::State(L"正在重新采集并校验所选骨架。",false,false,false);
-                } else if (command.kind==ui::CommandKind::ReleaseRig) {requestedName.clear();SetRigWriteTarget(requestedName);}
+                } else if (command.kind==ui::CommandKind::Refresh) {
+                    clearRequestedTarget("MANUAL_REFRESH");
+                    report << "[UI_RIG_REFRESH] accepted=1 stage=SCENE_DISCOVERY target_cleared=1 scan_follows=1\n";
+                } else if (command.kind==ui::CommandKind::ReleaseRig) {clearRequestedTarget("RELEASE");}
                 else if (command.kind!=ui::CommandKind::Refresh) {ui::State(L"请先绑定可控角色骨架，再载入动作。",false,false,false);}
             }
         }
@@ -641,6 +1209,8 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
             item = Item{}; item.klass = klass; item.descriptor = descriptor; item.metadataId = id;
         }
         job.complete = false; job.fault = 0; job.step = 0; job.mode=0; job.runtimeThread = 0;
+        job.fbikRead = false; job.fbikPass = false; job.fbikEffectors = -1; job.fbikChains = -1;
+        job.fbikReadFailure = 0; job.fbikReadFault = 0; job.fbikElementRead = 0;
         if (WaitForSingleObject(stop, 0) == WAIT_OBJECT_0) return false;
         if (Read(job.context.mainThreadSlot, job.mainThread) && job.mainThread) {
             Window window{job.mainThread, nullptr};
@@ -698,8 +1268,107 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
                         report << "bones_length=" << item.bonesLength << " native_bones_length=" << item.nativeBonesLength
                             << " bones_valid=" << item.bonesValid << " sharedMesh.name=" << Utf8(item.meshName, std::clamp(item.meshNameLength, 0, 127)) << '\n';
                     }
+                    if (i == 2 && job.fbikMethodsReady) {
+                        report << "[FBIK_READ] read=" << job.fbikRead
+                            << " effector_count=" << job.fbikEffectors
+                            << " chain_count=" << job.fbikChains
+                            << " in_ik_pass=" << job.fbikPass
+                            << " chain_element_read=" << job.fbikElementRead
+                            << " failure=" << (job.fbikReadFailure==1?"NO_SELECTED_ANIMATOR":job.fbikReadFailure==2?"INVALID_OR_UNAVAILABLE_VALUE":job.fbikReadFailure==3?"OPTIONAL_READ_SEH":"NONE")
+                            << " seh=0x" << std::hex << job.fbikReadFault << std::dec;
+                        if (job.fbikElementRead) {
+                            report << " chain_element_counts=";
+                            for (unsigned chain = 0; chain < job.fbikElementRead; ++chain) {
+                                if (chain) report << ',';
+                                report << job.fbikElementCounts[chain];
+                            }
+                        }
+                        report << '\n';
+                    }
+                }
+                report << "[GROUND_IK_HIERARCHY_SCAN] read=" << job.componentScanRead
+                    << " animator=0x" << std::hex << job.componentScanAnimator << std::dec
+                    << " scope=SELECTED_ANIMATOR_AND_ANCESTOR_GAMEOBJECTS"
+                    << " match_mode=EXACT_RUNTIME_CLASS parent_layout=UNUSED\n";
+                report << "[GROUND_IK_SUBTREE_SCAN] read=" << job.componentSubtreeRead
+                    << " fresh=" << job.componentSubtreeFresh
+                    << " animator=0x" << std::hex << job.componentSubtreeAnimator
+                    << " root=0x" << job.componentSubtreeRoot << std::dec
+                    << " root_name=" << job.componentSubtreeRootName
+                    << " component_count=" << job.componentSubtreeComponentCount
+                    << " unique_runtime_types=" << job.componentSubtreeTypeCount
+                    << " truncated=" << job.componentSubtreeTruncated
+                    << " scope=ANIMATOR_GAMEOBJECT_AND_DESCENDANTS include_inactive=1\n";
+                if (job.componentSubtreeFresh) {
+                    for (unsigned i = 0; i < job.componentSubtreeTypeCount; ++i) {
+                        const auto& type = job.componentSubtreeTypes[i];
+                        NativeClass described;
+                        report << "[GROUND_IK_COMPONENT_TYPE] count=" << type.count << " class=0x"
+                            << std::hex << type.klass << std::dec;
+                        if (runtime.DescribeClass(type.klass, described)) {
+                            report << " metadata_id=" << described.metadataId << " name="
+                                << (described.namespaze.empty() ? described.name : described.namespaze + "." + described.name);
+                        } else {
+                            report << " metadata_id=UNRESOLVED name=UNRESOLVED";
+                        }
+                        report << '\n';
+                    }
+                }
+                for (const auto& candidate : job.groundCandidates) {
+                    const bool runtimeComponent = std::string_view(candidate.name) == "MonoAnimationIKEventHelper" ||
+                        std::string_view(candidate.name) == "DynamicBoneArray";
+                    report << (runtimeComponent ? "[RUNTIME_COMPONENT_SCAN] " : "[GROUND_IK_SCAN] ")
+                        << candidate.namespaze << "." << candidate.name
+                        << " resolved=" << candidate.resolved << " read=" << candidate.read
+                        << " stage=" << GroundStageName(candidate.stage)
+                        << " instance_count=" << candidate.count << " sample_count=" << candidate.sampleCount
+                        << " reflection=0x" << std::hex << candidate.reflection << " array=0x" << candidate.array
+                        << " array_class=0x" << candidate.arrayClass << " element_descriptor=0x" << candidate.elementDescriptor
+                        << std::dec << " array_type=0x" << std::hex << unsigned(candidate.arrayType) << std::dec
+                        << " bounds=" << candidate.bounds << " length=" << candidate.length
+                        << " element_metadata_id=" << candidate.elementMetadataId
+                        << " expected_metadata_id=" << candidate.expectedMetadataId
+                        << " hierarchy_valid=" << candidate.hierarchyValid
+                        << " derives_Component=" << candidate.derivesComponent
+                        << " derives_Object=" << candidate.derivesObject
+                        << " actor_hierarchy_matches=" << candidate.hierarchyMatches
+                        << " actor_subtree_fresh=" << job.componentSubtreeFresh
+                        << " actor_subtree_matches=" << candidate.subtreeMatches << '\n';
+                    for (unsigned i = 0; i < candidate.sampleCount; ++i) {
+                        report << "[GROUND_IK_INSTANCE] " << candidate.namespaze << "." << candidate.name
+                            << " index=" << i << " object=0x" << std::hex << candidate.sampleObjects[i] << std::dec
+                            << " gameObject=" << candidate.sampleNames[i] << '\n';
+                    }
+                    for (unsigned i = 0; i < candidate.hierarchySampleCount; ++i) {
+                        report << "[GROUND_IK_HIERARCHY_INSTANCE] " << candidate.namespaze << "." << candidate.name
+                            << " depth=" << candidate.hierarchyDepth[i] << " object=0x" << std::hex
+                            << candidate.hierarchyObjects[i] << std::dec << " gameObject=" << candidate.hierarchyNames[i] << '\n';
+                    }
+                    if (job.componentSubtreeFresh) {
+                        for (unsigned i = 0; i < candidate.subtreeSampleCount; ++i) {
+                            report << (runtimeComponent ? "[RUNTIME_COMPONENT_INSTANCE] " : "[GROUND_IK_SUBTREE_INSTANCE] ")
+                                << candidate.namespaze << "." << candidate.name
+                                << " index=" << i << " object=0x" << std::hex << candidate.subtreeObjects[i]
+                                << std::dec << " gameObject=" << candidate.subtreeNames[i] << '\n';
+                        }
+                    }
+                }
+                for (unsigned i = 0; i < job.componentLayerCount; ++i) {
+                    const auto& layer = job.componentLayers[i];
+                    report << "[GROUND_IK_LAYER] depth=" << layer.depth << " stage=" << layer.stage
+                        << " transform=0x" << std::hex << layer.transform << " gameObject=0x" << layer.gameObject << std::dec
+                        << " name=" << Utf8(layer.name, std::clamp(layer.nameLength, 0, 127))
+                        << " component_count=" << layer.componentCount << '\n';
                 }
                 report.flush();
+                if (autoScene && targetFromFile && !job.complete && !job.fault && state.load()==3) {
+                    ++targetMisses;
+                    report << "target_match=MISS requested_actor=" << targetName << " consecutive=" << targetMisses << " snapshot=INCOMPLETE\n";
+                    if (targetMisses>=3) {
+                        clearRequestedTarget("AUTO_FALLBACK_INCOMPLETE");
+                        report << "requested_actor_fallback=AUTO_PLAYER_BRANCH_AFTER_3_MISSES\n";
+                    }
+                }
                 if (!job.complete || job.fault || state.load() != 3) {
                     ExportRigProbe(directory, report);
                     if (autoScene && !job.fault && state.load()==3 && !BoneWriteArmed() && !MotionRigArmed()) {
@@ -709,9 +1378,17 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
                     }
                     return false;
                 }
+                if (autoScene && targetFromFile && RigTargetUnavailable()) {
+                    ++targetMisses;
+                    report << "target_match=MISS requested_actor=" << targetName << " consecutive=" << targetMisses << '\n';
+                    if (targetMisses>=3) {
+                        clearRequestedTarget("AUTO_FALLBACK_UNAVAILABLE");
+                        report << "requested_actor_fallback=AUTO_PLAYER_BRANCH_AFTER_3_MISSES\n";
+                    }
+                } else if (RigHasTarget()) targetMisses=0;
                 if (autoScene && !MotionRigArmed()) {
                     if (ui::Enabled()) {ExportRigProbe(directory,report);ui::State(requestedName.empty()?L"选择一个可绑定骨架，然后点击绑定。":L"等待所选角色激活及骨架校验。",false,false,false);}
-                    report << "auto_scene=WAITING_UNIQUE_ACTIVE_TARGET_RIG; writes=NONE\n";report.flush();
+                    report << "auto_scene=WAITING_VALIDATED_PLAYER_RIG; writes=NONE\n";report.flush();
                     if (WaitForSingleObject(stop,5000)==WAIT_OBJECT_0) return false;
                     continue;
                 }
@@ -737,7 +1414,13 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
                         if (ui::Enabled()) ui::Bound(requestedName,unsigned(item.bonesLength));
                         bool rescan=false;
                         const auto passed=RunMotionSession(runtime,stop,module,window,report,directory,rescan,requestedName);
-                        if (ui::Enabled()&&passed&&rescan) {SetRigWriteTarget(requestedName);attempt=0;continue;}
+                        if (passed&&rescan) {
+                            const auto target=requestedName.empty()?std::string("<auto-player-branch>"):Utf8(requestedName.c_str(),int(requestedName.size()));
+                            SetRigWriteTarget(requestedName);
+                            report << "[RIG_TARGET] action=APPLY stage=RESCAN_RETURN target_after=" << target
+                                << " requested_actor_cleared=" << requestedName.empty() << "\n";
+                            attempt=0;continue;
+                        }
                         return passed;
                     }
                     return RunBoneExperiment(runtime,stop,module,window,report,directory);

@@ -19,6 +19,9 @@ namespace poser {
 namespace {
 constexpr unsigned MaxRig=256,MaxSources=128,MaxSamples=64,MaxSnapshots=16;
 constexpr unsigned MaxReferenceMeshes=64;
+// Nominal scale: 10 VMD units -> 1 Unity unit. This remains an empirical
+// calibration until the motion's matching PMX or a live axis test is available.
+constexpr float VmdPositionScale=0.1f;
 struct ReferenceMesh {
     uintptr_t renderer=0,native=0,transform=0,transformNative=0,array=0,mesh=0,meshNative=0;
     uint32_t handles[3]{};
@@ -33,6 +36,8 @@ struct Bone {
     MotionRigBone identity;
     uint32_t handle=0;
     Quaternion restoreRotation{0,0,0,1},desiredWorld{0,0,0,1};
+    Quaternion nativeHandoffRotation{0,0,0,1};
+    bool nativeHandoffValid=false;
     reference::Pose rest;
     Quaternion bindLocal{0,0,0,1},basisLocal{0,0,0,1},lastInput{0,0,0,1},lastWritten{0,0,0,1};
     int source=-1,depth=0;
@@ -48,11 +53,11 @@ struct Source {
     Quaternion currentWorld{0,0,0,1};
 };
 struct Leg {
-    int thigh=-1,calf=-1,foot=-1,track=-1,parentTrack=-1;
-    Vector3 anchor,pole;
+    int thigh=-1,calf=-1,foot=-1,track=-1,parentTrack=-1,toggleTrack=-1;
+    Vector3 anchor,pole,initialTarget;
     Quaternion firstFoot{0,0,0,1};
     float upper=0,lower=0,maxResidual=0,lastUpper=0,lastLower=0,lastResidual=0;
-    unsigned ticks=0,clamped=0,failureStep=0;
+    unsigned ticks=0,enabledTicks=0,clamped=0,failureStep=0;
 };
 struct Sample { DWORD thread; uint64_t tick; double frame; unsigned matched; Quaternion left,right,head; };
 struct ABSnapshot {
@@ -62,16 +67,33 @@ struct ABSnapshot {
     Quaternion rootWorld{0,0,0,1},rotations[MaxRig]{},world[MaxRig]{},parentWorld[MaxRig]{};
     Vector3 positions[MaxRig]{};bool written[MaxRig]{};
 };
+enum class OwnerFailure : unsigned {
+    None,
+    NotArmed,
+    MainThread,
+    RuntimeThread,
+    MissingHandle,
+    HandleTarget,
+    ObjectUnreadable,
+    ClassMismatch,
+    NativeUnreadable,
+    NativeMismatch,
+    Inactive,
+};
 struct Playback {
     Bone bones[MaxRig]; Source sources[MaxSources]; unsigned order[MaxRig];
     uintptr_t owner[4]{},ownerNative[4]{}; uint32_t ownerHandles[4]{};
     unsigned boneCount=0,sourceCount=0,writeBones=0,mapped=0,rooted=0,freed=0;
     unsigned frames=0,writes=0,restoredBones=0,fault=0,sampleCount=0;
-    int root=-1,left=-1,right=-1,head=-1;
+    int root=-1,motionRoot=-1,left=-1,right=-1,head=-1;
     uint64_t startTick=0,nextSample=0,maxTickMicroseconds=0;
     LARGE_INTEGER frequency{};
     DWORD mainThread=0;
     bool armed=false,captured=false,restore=false;
+    bool identityRejected=false;
+    OwnerFailure ownerFailure=OwnerFailure::None;
+    unsigned ownerFailureIndex=UINT_MAX;
+    uintptr_t ownerFailureExpected=0,ownerFailureObserved=0;
     bool abReportPending=false;
     double lastFrame=0;
     ABSnapshot abSnapshots[MaxSnapshots];
@@ -95,6 +117,44 @@ struct Playback {
     float avatarMaxAngle=0,avatarMaxPosition=0;
     int pelvisAuxiliary=-1;bool auxiliaryRejected=false;
     bool fingersReady=false;unsigned fingerFailure=0;
+    unsigned passthroughBones=0,controlledBones=0;
+    int allTrack=-1,centerTrack=-1,grooveTrack=-1;
+    Vector3 rootRestorePosition{};
+    Vector3 rootNativePosition{};
+    Vector3 rootHandoffPosition{};
+    Vector3 rootWrittenPosition{};
+    bool rootPositionCaptured=false,rootPositionTouched=false;
+    unsigned rootPositionWrites=0;
+    unsigned rootNativeSamples=0;
+    Vector3 rootNativeFirst{};
+    Vector3 rootNativeLast{};
+    float rootNativeMaxDelta=0;
+    Vector3 actorRootRestorePosition{};
+    Vector3 actorRootHandoffPosition{};
+    Vector3 actorRootLocalRestoreReadback{};
+    Quaternion actorRootRestoreRotation{0,0,0,1},actorRootHandoffRotation{0,0,0,1};
+    Quaternion actorRootLocalRotationRestoreReadback{0,0,0,1};
+    Vector3 actorRootNativeLast{};
+    float actorRootNativeMaxDelta=0;
+    unsigned actorRootNativeSamples=0;
+    bool actorRootPositionCaptured=false,actorRootPositionTouched=false;
+    bool actorRootRotationCaptured=false;
+    bool actorRootLocalRestored=false;
+    Vector3 actorRootWorldFirst{},actorRootWorldLast{};
+    float actorRootWorldMaxDelta=0;
+    Vector3 actorRootWorldRestorePosition{},actorRootWorldHandoffPosition{};
+    Vector3 actorRootWorldStopReadback{};
+    bool actorRootWorldCaptured=false,actorRootWorldTouched=false;
+    float actorRootWorldMaxWriteError=0;
+    Quaternion actorRootWorldRestoreRotation{0,0,0,1},actorRootWorldHandoffRotation{0,0,0,1};
+    Quaternion actorRootWorldRotationStopReadback{0,0,0,1};
+    bool actorRootWorldRotationCaptured=false,actorRootWorldRotationTouched=false;
+    float actorRootWorldRotationMaxWriteError=0,actorRootWorldRotationMaxDelta=0;
+    float actorRootStopWorldPositionError=0,actorRootStopWorldRotationError=0;
+    bool ownerActiveAtStopCaptured=false,ownerActiveAtStop=false;
+    bool actorRootLocalHandoffOk=false,actorRootWorldContextSame=false;
+    Vector3 motionRootWorldFirst{},motionRootWorldLast{};
+    float motionRootWorldMaxDelta=0;
 };
 Playback playback{};
 ReferenceMesh referenceMeshes[MaxReferenceMeshes]{};
@@ -150,15 +210,51 @@ void FreeRoots() {
     for (auto& handle:playback.referenceRoots) if (handle) {reinterpret_cast<void (*)(uint32_t)>(rigCalls.context.handleFree)(handle);handle=0;++playback.freed;}
     for (auto& bone:playback.bones) if (bone.handle) { reinterpret_cast<void (*)(uint32_t)>(rigCalls.context.handleFree)(bone.handle); bone.handle=0; ++playback.freed; }
     for (auto& handle:playback.ownerHandles) if (handle) { reinterpret_cast<void (*)(uint32_t)>(rigCalls.context.handleFree)(handle); handle=0; ++playback.freed; }
-    playback.armed=false;
+    playback.armed=false; playback.captured=false;
 }
 bool OwnerIdentity(bool requireActive=true) {
-    if (!playback.armed || !MainThread()) return false;
+    const auto reject=[&](OwnerFailure reason,unsigned index=UINT_MAX,uintptr_t expected=0,uintptr_t observed=0) {
+        if (playback.ownerFailure==OwnerFailure::None) {
+            playback.ownerFailure=reason;
+            playback.ownerFailureIndex=index;
+            playback.ownerFailureExpected=expected;
+            playback.ownerFailureObserved=observed;
+        }
+        return false;
+    };
+    if (!playback.armed) return reject(OwnerFailure::NotArmed);
+    const auto threadId=GetCurrentThreadId();
+    if (threadId!=playback.mainThread) return reject(OwnerFailure::MainThread,UINT_MAX,playback.mainThread,threadId);
+    if (!reinterpret_cast<uintptr_t (*)()>(rigCalls.context.threadCurrent)()) return reject(OwnerFailure::RuntimeThread);
     const uintptr_t classes[]={rigCalls.transformClass,rigCalls.rendererClass,rigCalls.animatorClass,rigCalls.gameObjectClass};
-    for (unsigned i=0;i<4;++i) if (!playback.ownerHandles[i] ||
-        reinterpret_cast<uintptr_t (*)(uint32_t)>(rigCalls.context.handleTarget)(playback.ownerHandles[i])!=playback.owner[i] ||
-        !Alive(playback.owner[i],playback.ownerNative[i],classes[i])) return false;
-    return !requireActive || reinterpret_cast<bool (*)(uintptr_t,uintptr_t)>(activeEntry)(playback.owner[3],activeDescriptor);
+    for (unsigned i=0;i<4;++i) {
+        if (!playback.ownerHandles[i]) return reject(OwnerFailure::MissingHandle,i,playback.owner[i]);
+        const auto target=reinterpret_cast<uintptr_t (*)(uint32_t)>(rigCalls.context.handleTarget)(playback.ownerHandles[i]);
+        if (target!=playback.owner[i]) return reject(OwnerFailure::HandleTarget,i,playback.owner[i],target);
+        uintptr_t klass=0,native=0;
+        if (!Read(playback.owner[i],klass)) return reject(OwnerFailure::ObjectUnreadable,i,classes[i]);
+        if (klass!=classes[i]) return reject(OwnerFailure::ClassMismatch,i,classes[i],klass);
+        if (!Read(playback.owner[i]+0x10,native)) return reject(OwnerFailure::NativeUnreadable,i,playback.ownerNative[i]);
+        if (native!=playback.ownerNative[i]) return reject(OwnerFailure::NativeMismatch,i,playback.ownerNative[i],native);
+    }
+    if (requireActive && !reinterpret_cast<bool (*)(uintptr_t,uintptr_t)>(activeEntry)(playback.owner[3],activeDescriptor))
+        return reject(OwnerFailure::Inactive,3,1,0);
+    return true;
+}
+const char* OwnerFailureName(OwnerFailure failure) {
+    switch (failure) {
+    case OwnerFailure::NotArmed: return "NOT_ARMED";
+    case OwnerFailure::MainThread: return "MAIN_THREAD_ID";
+    case OwnerFailure::RuntimeThread: return "RUNTIME_THREAD";
+    case OwnerFailure::MissingHandle: return "HANDLE_MISSING";
+    case OwnerFailure::HandleTarget: return "HANDLE_TARGET_CHANGED";
+    case OwnerFailure::ObjectUnreadable: return "OBJECT_UNREADABLE";
+    case OwnerFailure::ClassMismatch: return "CLASS_MISMATCH";
+    case OwnerFailure::NativeUnreadable: return "NATIVE_POINTER_UNREADABLE";
+    case OwnerFailure::NativeMismatch: return "NATIVE_POINTER_CHANGED";
+    case OwnerFailure::Inactive: return "ACTOR_INACTIVE";
+    default: return "NONE";
+    }
 }
 bool BoneIdentity(const Bone& bone) {
     return bone.handle && reinterpret_cast<uintptr_t (*)(uint32_t)>(rigCalls.context.handleTarget)(bone.handle)==bone.identity.object &&
@@ -367,6 +463,9 @@ int Track(std::wstring name) {
     for (auto& ch:name) if (ch>=L'０' && ch<=L'９') ch=ch-L'０'+L'0';
     return vmd::FindTrack(clip,name);
 }
+bool HasRootMotionTrack() {
+    return playback.allTrack>=0 || playback.centerTrack>=0 || playback.grooveTrack>=0;
+}
 int AddSource(const std::wstring& name,const std::wstring& target,int parent) {
     if (playback.sourceCount==MaxSources || name.size()>=32 || target.size()>=128) return -1;
     const auto index=int(playback.sourceCount++); auto& source=playback.sources[index]; source={};
@@ -407,6 +506,9 @@ bool ValidateFingerChains() {
 void BuildSources() {
     playback.sourceCount=0; playback.mapped=0;playback.pelvisAuxiliary=-1;playback.auxiliaryRejected=false;
     playback.fingersReady=false;playback.fingerFailure=0;
+    playback.allTrack=Track(L"全ての親");
+    playback.centerTrack=Track(L"センター");
+    playback.grooveTrack=Track(L"グルーブ");
     for (auto& bone:playback.bones) { bone.source=-1; bone.write=false;bone.upperWrite=false; }
     const auto all=AddSource(L"全ての親",L"",-1),center=AddSource(L"センター",L"",all),groove=AddSource(L"グルーブ",L"",center),waist=AddSource(L"腰",L"",groove);
     const auto lower=AddSource(L"下半身",L"Bip001 Pelvis",waist),upper=AddSource(L"上半身",L"Bip001 Spine",waist);
@@ -441,9 +543,21 @@ void BuildSources() {
         const auto thigh=AddSource(prefix+L"足",target+L"Thigh",lower),knee=AddSource(prefix+L"ひざ",target+L"Calf",thigh),foot=AddSource(prefix+L"足首",target+L"Foot",knee);
         AddSource(prefix+L"つま先",target+L"Toe0",foot);
     }
-    playback.writeBones=0;
-    // 没有动作轨的 skin bone 也使用静态基准，避免衣物、头发等继续叠加游戏旋转。
-    for (auto& bone:playback.bones) bone.write=bone.identity.owned&&bone.hasReference;
+    playback.writeBones=0; playback.passthroughBones=0; playback.controlledBones=0;
+    // 只有实际有 VMD 轨道的骨骼及其静态 bind 父链由 Poser 写入。
+    // 未被动作接管的蒙皮骨交还原生，避免在 LateUpdate 后把裙摆/头发物理冻结到 bind pose。
+    for (unsigned i=0;i<playback.sourceCount;++i) {
+        const auto& source=playback.sources[i];
+        if (source.node<0 || source.track<0) continue;
+        auto& bone=playback.bones[source.node];
+        if (!bone.hasReference) continue;
+        bone.source=int(i); bone.write=true;
+        for (auto parent=bone.identity.parent;parent>=0;parent=playback.bones[parent].identity.parent) {
+            auto& ancestor=playback.bones[parent];
+            if (!ancestor.hasReference) break;
+            ancestor.write=true;
+        }
+    }
     if (abSettings.enabled) {
         playback.mapped=0;
         for (auto& bone:playback.bones) {bone.write=false;bone.source=-1;bone.parentReference=false;}
@@ -490,21 +604,54 @@ void BuildSources() {
         const std::wstring prefix=side?L"右":L"左",target=side?L"Bip001 R ":L"Bip001 L ";
         leg.thigh=Named(target+L"Thigh");leg.calf=Named(target+L"Calf");leg.foot=Named(target+L"Foot");
         leg.track=Track(prefix+L"足ＩＫ");if (leg.track<0) leg.track=Track(prefix+L"足IK");
-        leg.parentTrack=Track(prefix+L"足IK親");
+        leg.parentTrack=Track(prefix+L"足ＩＫ親");if (leg.parentTrack<0) leg.parentTrack=Track(prefix+L"足IK親");
+        leg.toggleTrack=vmd::FindIkTrack(clip,prefix+L"足ＩＫ");
+        if (leg.toggleTrack<0) leg.toggleTrack=vmd::FindIkTrack(clip,prefix+L"足IK");
+        // VMD optional IK blocks may omit a toggle track; absence means the
+        // solver remains enabled throughout the motion. Explicit OFF samples
+        // are still honored when the track exists.
         if (leg.track<0 || leg.thigh<0 || leg.calf<0 || leg.foot<0) {leg.track=-1;continue;}
         if (playback.bones[leg.calf].identity.parent!=leg.thigh || playback.bones[leg.foot].identity.parent!=leg.calf) {leg.track=-1;continue;}
         if (!playback.bones[leg.thigh].hasReference||!playback.bones[leg.calf].hasReference||!playback.bones[leg.foot].hasReference) leg.track=-1;
     }
-    for (unsigned i=0;i<playback.boneCount;++i) if (playback.bones[i].write) ++playback.writeBones;
+    for (unsigned i=0;i<playback.boneCount;++i) {
+        const auto& bone=playback.bones[i];
+        if (bone.write) ++playback.writeBones;
+        if (bone.hasReference) {
+            if (bone.write) ++playback.controlledBones;
+            else ++playback.passthroughBones;
+        }
+    }
 }
 bool CaptureReference() {
-    if (!OwnerIdentity() || !meshGetter.entry || !bindGetter.entry || !referenceMeshClass) return false;
+    playback.identityRejected=false;
     playback.referenceReady=false;playback.referenceBones=0;playback.referenceFailure=1;
+    if (!OwnerIdentity()) {
+        playback.identityRejected=true;
+        playback.referenceFailure=5;
+        return false;
+    }
+    if (!meshGetter.entry || !bindGetter.entry || !referenceMeshClass) {
+        playback.referenceFailure=6;
+        return false;
+    }
     for (auto& bone:playback.bones) bone.hasReference=false;
     const auto mesh=reinterpret_cast<uintptr_t (*)(uintptr_t,uintptr_t)>(meshGetter.entry)(playback.owner[1],meshGetter.descriptor);
+    auto classifyMeshFailure=[&]() {
+        if (!OwnerIdentity() || reinterpret_cast<uintptr_t (*)(uintptr_t,uintptr_t)>(meshGetter.entry)(playback.owner[1],meshGetter.descriptor)!=mesh) {
+            playback.identityRejected=true; playback.referenceFailure=5;
+        } else playback.referenceFailure=7;
+    };
     uintptr_t native=0;
-    if (!Read(mesh+0x10,native)||!Alive(mesh,native,referenceMeshClass)) return false;
-    auto& meshRoot=playback.referenceRoots[0];meshRoot=Root(mesh);if (!meshRoot) return false;
+    if (!mesh || !Read(mesh+0x10,native)||!Alive(mesh,native,referenceMeshClass)) {
+        classifyMeshFailure();
+        return false;
+    }
+    auto& meshRoot=playback.referenceRoots[0];meshRoot=Root(mesh);
+    if (!meshRoot) {
+        classifyMeshFailure();
+        return false;
+    }
     // 所有临时 managed 引用在同一 main-thread leaf 释放；矩阵以值复制，不跨帧借用数组。
     auto& arrayRoot=playback.referenceRoots[1];bool passed=false;
     playback.referenceFailure=2;
@@ -519,7 +666,9 @@ bool CaptureReference() {
             auto& bone=playback.bones[i];if (bone.identity.skinIndex<0) continue;
             playback.referenceFailure=3;
             reference::Matrix managed{},original{};
-            passed=bone.identity.owned&&BoneIdentity(bone)&&uint64_t(bone.identity.skinIndex)<length&&!used[bone.identity.skinIndex]&&
+            if (!bone.identity.owned) {passed=false;break;}
+            if (!BoneIdentity(bone)) {playback.identityRejected=true;playback.referenceFailure=5;passed=false;break;}
+            passed=uint64_t(bone.identity.skinIndex)<length&&!used[bone.identity.skinIndex]&&
                 Read(array+0x20+size_t(bone.identity.skinIndex)*64,managed)&&Read(values+size_t(bone.identity.skinIndex)*64,original)&&
                 std::memcmp(&managed,&original,sizeof(managed))==0&&reference::Decode(managed,bone.rest);
             if (passed) {used[bone.identity.skinIndex]=true;bone.hasReference=true;++expected;}
@@ -529,11 +678,21 @@ bool CaptureReference() {
         const auto body=reinterpret_cast<uintptr_t (*)(uintptr_t,uintptr_t)>(rigCalls.transform)(playback.owner[1],rigCalls.transformMethod);
         int bodyIndex=-1;for (unsigned i=0;i<playback.boneCount;++i) if (playback.bones[i].identity.object==body) bodyIndex=int(i);
         Quaternion bodyRotation{};Vector3 bodyPosition{},bodyScale{};playback.referenceFailure=4;
-        passed=passed&&bodyIndex>=0&&playback.bones[bodyIndex].identity.parent==playback.root&&BoneIdentity(playback.bones[bodyIndex])&&
+        const bool bodyInRig=bodyIndex>=0&&playback.bones[bodyIndex].identity.parent==playback.root;
+        if (passed&&bodyInRig&&!BoneIdentity(playback.bones[bodyIndex])) {
+            playback.identityRejected=true;playback.referenceFailure=5;passed=false;
+        }
+        passed=passed&&bodyInRig&&BoneIdentity(playback.bones[bodyIndex])&&
             ReadBoneRotation(body,playback.bones[bodyIndex].identity.native,bodyRotation)&&bone_detail::Same(bodyRotation,{0,0,0,1})&&
             ReadBonePosition(body,playback.bones[bodyIndex].identity.native,bodyPosition,false)&&ik::Length(bodyPosition)<0.0001f&&
             ReadBoneScale(body,playback.bones[bodyIndex].identity.native,bodyScale)&&ik::Length(ik::Sub(bodyScale,{1,1,1}))<0.0001f;
+        if (passed&&!OwnerIdentity()) {playback.identityRejected=true;playback.referenceFailure=5;passed=false;}
         if (passed) {playback.referenceMeshObject=mesh;playback.referenceMeshNative=native;playback.referenceBones=expected;playback.referenceReady=true;playback.referenceFailure=0;}
+    }
+    if (!passed && !playback.identityRejected) {
+        if (!OwnerIdentity() || reinterpret_cast<uintptr_t (*)(uintptr_t,uintptr_t)>(meshGetter.entry)(playback.owner[1],meshGetter.descriptor)!=mesh) {
+            playback.identityRejected=true; playback.referenceFailure=5;
+        }
     }
     if (arrayRoot) {reinterpret_cast<void (*)(uint32_t)>(rigCalls.context.handleFree)(arrayRoot);arrayRoot=0;++playback.freed;}
     reinterpret_cast<void (*)(uint32_t)>(rigCalls.context.handleFree)(meshRoot);meshRoot=0;++playback.freed;
@@ -548,13 +707,116 @@ bool CaptureReference() {
 bool Position(int index,Vector3& out) {
     const auto& bone=playback.bones[index];return BoneIdentity(bone)&&ReadBonePosition(bone.identity.object,bone.identity.native,out,true);
 }
+bool LocalPosition(int index,Vector3& out) {
+    const auto& bone=playback.bones[index];return BoneIdentity(bone)&&ReadBonePosition(bone.identity.object,bone.identity.native,out,false);
+}
+Vector3 RootMotion(double frame) {
+    const auto all=playback.allTrack,center=playback.centerTrack,groove=playback.grooveTrack;
+    const auto localPosition=[&](int track) {
+        if(track<0)return Vector3{};
+        return ik::ModelPosition(vmd::SamplePosition(clip.tracks[track],frame));
+    };
+    const auto localRotation=[&](int track) {
+        return track<0?Quaternion{0,0,0,1}:basis::ModelInput(vmd::Sample(clip.tracks[track],frame));
+    };
+    const auto allPosition=localPosition(all),centerPosition=localPosition(center),groovePosition=localPosition(groove);
+    const auto allRotation=localRotation(all),centerRotation=localRotation(center);
+    const auto centerWorld=vmd::Multiply(allRotation,centerRotation);
+    const auto centerWorldPosition=ik::Add(allPosition,ik::Rotate(allRotation,centerPosition));
+    const auto grooveWorldPosition=ik::Add(centerWorldPosition,ik::Rotate(centerWorld,groovePosition));
+    return ik::Scale(grooveWorldPosition,VmdPositionScale);
+}
+bool WriteRootMotion(double frame) {
+    if (!playback.rootPositionCaptured || playback.motionRoot<0) return false;
+    if (!LocalPosition(playback.motionRoot,playback.rootHandoffPosition)) return false;
+    Vector3 worldBefore{};
+    if (!Position(playback.motionRoot,worldBefore)) return false;
+    if (playback.rootNativeSamples==0) playback.motionRootWorldFirst=worldBefore;
+    else playback.motionRootWorldMaxDelta=std::max(playback.motionRootWorldMaxDelta,
+        ik::Length(ik::Sub(worldBefore,playback.motionRootWorldLast)));
+    playback.motionRootWorldLast=worldBefore;
+    if (playback.rootNativeSamples==0) playback.rootNativeFirst=playback.rootHandoffPosition;
+    else playback.rootNativeMaxDelta=std::max(playback.rootNativeMaxDelta,
+        ik::Length(ik::Sub(playback.rootHandoffPosition,playback.rootNativeLast)));
+    playback.rootNativeLast=playback.rootHandoffPosition;
+    ++playback.rootNativeSamples;
+    const auto delta=RootMotion(frame);
+    const Vector3 desired{playback.rootRestorePosition.x+delta.x,
+        playback.rootRestorePosition.y+delta.y,playback.rootRestorePosition.z+delta.z};
+    // Mark before invoking the setter: a successful native mutation followed by
+    // an unreadable postcondition must still enter the stop-time handoff path.
+    playback.rootPositionTouched=true;
+    if (!WriteBonePosition(playback.bones[playback.motionRoot].identity.object,desired)) return false;
+    Vector3 after{};
+    if (!LocalPosition(playback.motionRoot,after) || ik::Length(ik::Sub(after,desired))>0.0001f) return false;
+    Vector3 worldAfter{};
+    if (!Position(playback.motionRoot,worldAfter)) return false;
+    playback.rootWrittenPosition=after;++playback.rootPositionWrites;
+    return true;
+}
+bool WorldRotation(int index,Quaternion& out);
+float RotationDelta(Quaternion a,Quaternion b) {
+    const auto dot=std::fabs(a.x*b.x+a.y*b.y+a.z*b.z+a.w*b.w);
+    return 2.0f*std::acos(std::clamp(dot,0.0f,1.0f))*57.2957795131f;
+}
+// Unity's world-rotation setter is quantized by the game-side Transform path.
+// Keep the local visual freeze strict while allowing the observed sub-degree
+// readback quantization; larger drift still faults and hands control back.
+constexpr float ActorRootRotationReadbackToleranceDegrees = 0.1f;
+bool FreezeActorRoot() {
+    if (!playback.actorRootPositionCaptured || !playback.actorRootRotationCaptured ||
+        !playback.actorRootWorldRotationCaptured || playback.root<0) return false;
+    // Once the world setter has run, a moving parent changes this transform's
+    // local TRS as hierarchy compensation. It is no longer a native handoff
+    // value, so keep the genuine pre-freeze local pair captured at start.
+    Vector3 observedLocal{};
+    Quaternion observedLocalRotation{};
+    if (!LocalPosition(playback.root, observedLocal) ||
+        !ReadBoneRotation(playback.bones[playback.root].identity.object,
+            playback.bones[playback.root].identity.native, observedLocalRotation)) return false;
+    Vector3 worldBefore{};
+    Quaternion rotationBefore{};
+    if (!Position(playback.root,worldBefore) || !WorldRotation(playback.root,rotationBefore)) return false;
+    playback.actorRootWorldHandoffPosition=worldBefore;
+    playback.actorRootWorldHandoffRotation=rotationBefore;
+    if (playback.actorRootNativeSamples==0) playback.actorRootWorldFirst=worldBefore;
+    else playback.actorRootWorldMaxDelta=std::max(playback.actorRootWorldMaxDelta,
+        ik::Length(ik::Sub(worldBefore,playback.actorRootWorldLast)));
+    playback.actorRootWorldLast=worldBefore;
+    if (playback.actorRootNativeSamples) playback.actorRootWorldRotationMaxDelta=std::max(
+        playback.actorRootWorldRotationMaxDelta, RotationDelta(rotationBefore,playback.actorRootWorldRestoreRotation));
+    if (playback.actorRootNativeSamples==0) playback.actorRootNativeLast=observedLocal;
+    else playback.actorRootNativeMaxDelta=std::max(playback.actorRootNativeMaxDelta,
+        ik::Length(ik::Sub(observedLocal,playback.actorRootNativeLast)));
+    playback.actorRootNativeLast=observedLocal;
+    ++playback.actorRootNativeSamples;
+    playback.actorRootWorldTouched=true;
+    playback.actorRootPositionTouched=true;
+    if (!WriteBoneWorldPosition(playback.bones[playback.root].identity.object,playback.actorRootWorldRestorePosition)) return false;
+    Vector3 worldAfter{};
+    if (!Position(playback.root,worldAfter)) return false;
+    const auto error=ik::Length(ik::Sub(worldAfter,playback.actorRootWorldRestorePosition));
+    playback.actorRootWorldMaxWriteError=std::max(playback.actorRootWorldMaxWriteError,error);
+    if (error>0.0001f) return false;
+    playback.actorRootWorldRotationTouched=true;
+    if (!WriteBoneWorldRotation(playback.bones[playback.root].identity.object,playback.actorRootWorldRestoreRotation)) return false;
+    Quaternion rotationAfter{};
+    if (!WorldRotation(playback.root,rotationAfter)) return false;
+    const auto rotationError=RotationDelta(rotationAfter,playback.actorRootWorldRestoreRotation);
+    playback.actorRootWorldRotationMaxWriteError=std::max(playback.actorRootWorldRotationMaxWriteError,rotationError);
+    return rotationError<=ActorRootRotationReadbackToleranceDegrees;
+}
 bool WorldRotation(int index,Quaternion& out) {
     const auto& bone=playback.bones[index];return BoneIdentity(bone)&&ReadBoneWorldRotation(bone.identity.object,bone.identity.native,out);
 }
 bool IKSet(int index,Quaternion world) {
-    const auto& bone=playback.bones[index];Quaternion parent{},after{};
+    auto& bone=playback.bones[index];Quaternion parent{},after{};
     if (bone.identity.parent<0 || !WorldRotation(bone.identity.parent,parent)) return false;
     const auto local=vmd::Multiply(vmd::Inverse(parent),world);
+    if (!bone.nativeHandoffValid &&
+        !ReadBoneRotation(bone.identity.object,bone.identity.native,bone.nativeHandoffRotation)) return false;
+    bone.nativeHandoffValid=true;
+    bone.touched=true;
     if (!BoneIdentity(bone)||!WriteBoneRotation(bone.identity.object,local)||!ReadBoneRotation(bone.identity.object,bone.identity.native,after)||!bone_detail::Same(after,local)) return false;
     ++playback.ikWrites;return true;
 }
@@ -582,7 +844,13 @@ bool PrepareIK() {
         const auto bend=ik::Sub(first,ik::Scale(direction,ik::Dot(first,direction)));
         leg.pole=ik::Unit(bend);
         if (ik::Length(leg.pole)<0.5f) leg.pole={0,0,1};
-        leg.anchor=ik::Scale(restFoot,scale);
+        // VMD IK positions are model-space targets, not offsets from the
+        // game's bind foot. Retarget motion relative to frame 0 so the
+        // opening frame cannot double-apply its absolute target.
+        auto initialTarget=ik::ModelPosition(vmd::SamplePosition(clip.tracks[leg.track],0));
+        if (leg.parentTrack>=0) initialTarget=ik::Add(initialTarget,ik::ModelPosition(vmd::SamplePosition(clip.tracks[leg.parentTrack],0)));
+        leg.initialTarget=initialTarget;
+        leg.anchor=restFoot;
         leg.firstFoot=playback.bones[leg.foot].rest.rotation;
         leg.ticks=0;leg.clamped=0;leg.maxResidual=0;
     }
@@ -592,10 +860,17 @@ bool SolveIK(double frame,float blend) {
     if (!footIK||abSettings.enabled) return true;
     Vector3 root{};Quaternion rotation{};
     if (!Position(playback.root,root)||!WorldRotation(playback.root,rotation)) return false;
-    for (auto& leg:playback.legs) if (leg.track>=0) {
-        auto delta=vmd::SamplePosition(clip.tracks[leg.track],frame);
-        if (leg.parentTrack>=0) delta=ik::Add(delta,vmd::SamplePosition(clip.tracks[leg.parentTrack],frame));
-        const auto goal=ik::Add(root,ik::Rotate(rotation,ik::Add(leg.anchor,ik::Scale(delta,ikUnits*blend))));
+    for (unsigned side=0;side<2;++side) {
+        auto& leg=playback.legs[side];
+        if (leg.track<0) continue;
+        if (leg.toggleTrack>=0 && !vmd::SampleIkEnabled(clip,clip.ikTracks[size_t(leg.toggleTrack)].name,frame)) continue;
+        ++leg.enabledTicks;
+        auto delta=ik::ModelPosition(vmd::SamplePosition(clip.tracks[leg.track],frame));
+        if (leg.parentTrack>=0) delta=ik::Add(delta,ik::ModelPosition(vmd::SamplePosition(clip.tracks[leg.parentTrack],frame)));
+        delta=ik::Sub(delta,leg.initialTarget);
+        // Bip001 已在本帧先接管 Center/Groove 位移；足目标使用 setter
+        // 回读的完整 localPosition，保留原生启动基线并跟随 VMD 位移。
+        const auto goal=ik::Goal(root,rotation,leg.anchor,delta,ikUnits*blend,playback.rootWrittenPosition);
         Vector3 hip{},knee{},foot{};Quaternion thigh{},calf{};
         leg.failureStep=1;
         if (!Position(leg.thigh,hip)||!Position(leg.calf,knee)||!Position(leg.foot,foot)||!WorldRotation(leg.thigh,thigh)) return false;
@@ -607,7 +882,7 @@ bool SolveIK(double frame,float blend) {
         leg.failureStep=3;
         if (!ik::Solve(hip,goal,ik::Rotate(rotation,leg.pole),leg.upper,leg.lower,solution)) return false;
         leg.failureStep=4;
-        if (!IKSet(leg.thigh,vmd::Multiply(ik::FromTo(ik::Sub(knee,hip),ik::Sub(solution.knee,hip)),thigh))) return false;
+    if (!IKSet(leg.thigh,vmd::Multiply(ik::FromTo(ik::Sub(knee,hip),ik::Sub(solution.knee,hip)),thigh))) return false;
         leg.failureStep=5;
         if (!Position(leg.calf,knee)||!Position(leg.foot,foot)||!WorldRotation(leg.calf,calf)) return false;
         leg.failureStep=6;
@@ -616,7 +891,8 @@ bool SolveIK(double frame,float blend) {
         leg.lastResidual=residual;leg.failureStep=7;
         if (!std::isfinite(residual)||residual>(leg.upper+leg.lower)*0.002f) return false;
         leg.maxResidual=std::max(leg.maxResidual,residual);leg.clamped+=solution.clamped; ++leg.ticks;
-        const auto footWorld=vmd::Multiply(rotation,vmd::Slerp(leg.firstFoot,vmd::Multiply(vmd::Sample(clip.tracks[leg.track],frame),leg.firstFoot),blend));
+        const auto footInput=basis::ModelInput(vmd::Sample(clip.tracks[leg.track],frame));
+        const auto footWorld=vmd::Multiply(rotation,vmd::Slerp(leg.firstFoot,vmd::Multiply(footInput,leg.firstFoot),blend));
         leg.failureStep=8;
         if (!IKSet(leg.foot,footWorld)) return false;
         leg.failureStep=0;
@@ -636,11 +912,62 @@ bool Stop() {
     bool restored=true;
     if (playback.captured) {
         restored=OwnerIdentity(false); playback.restoredBones=0;
+        playback.ownerActiveAtStopCaptured=restored;
+        playback.ownerActiveAtStop=restored&&reinterpret_cast<bool (*)(uintptr_t,uintptr_t)>(activeEntry)(playback.owner[3],activeDescriptor);
+        if (!restored) playback.identityRejected=true;
         for (unsigned i=0;restored && i<playback.boneCount;++i) if (playback.bones[i].touched) {
             auto& bone=playback.bones[i]; Quaternion after{};
-            restored=BoneIdentity(bone) && WriteBoneRotation(bone.identity.object,bone.restoreRotation) && ReadBoneRotation(bone.identity.object,bone.identity.native,after) && bone_detail::Same(after,bone.restoreRotation);
+            const auto& handoff=bone.nativeHandoffValid?bone.nativeHandoffRotation:bone.restoreRotation;
+            const bool identityValid=BoneIdentity(bone);
+            if (!identityValid) playback.identityRejected=true;
+            restored=identityValid && WriteBoneRotation(bone.identity.object,handoff) && ReadBoneRotation(bone.identity.object,bone.identity.native,after) && bone_detail::Same(after,handoff);
             bone.restoreReadback=after;bone.restoreChecked=restored;
             if (restored) ++playback.restoredBones;
+        }
+        if (playback.rootPositionTouched) {
+            // Root translation has an independent setter and must be handed back
+            // even when a rotation restore failed; otherwise a partial stop can
+            // leave the actor displaced by the VMD track.
+            const bool rootIdentityValid=BoneIdentity(playback.bones[playback.motionRoot]);
+            if (!rootIdentityValid) playback.identityRejected=true;
+            bool rootRestored=rootIdentityValid &&
+                WriteBonePosition(playback.bones[playback.motionRoot].identity.object,playback.rootHandoffPosition);
+            Vector3 after{};
+            rootRestored=rootRestored && LocalPosition(playback.motionRoot,after) &&
+                ik::Length(ik::Sub(after,playback.rootHandoffPosition))<=0.0001f;
+            if (rootRestored) playback.rootWrittenPosition=after;
+            restored=restored && rootRestored;
+        }
+        if (playback.actorRootWorldTouched || playback.actorRootWorldRotationTouched) {
+            auto& actorRoot=playback.bones[playback.root];
+            Vector3 worldAfter{};
+            Quaternion worldRotationAfter{};
+            const bool actorIdentityValid=BoneIdentity(actorRoot);
+            if (!actorIdentityValid) playback.identityRejected=true;
+            // Hand back the pair captured before the first world freeze. The
+            // per-frame local values are inverse-parent compensation and must
+            // never be restored as if they were native animation state.
+            const bool positionRestored=actorIdentityValid &&
+                WriteBonePosition(actorRoot.identity.object,playback.actorRootRestorePosition) &&
+                LocalPosition(playback.root,playback.actorRootLocalRestoreReadback) &&
+                ik::Length(ik::Sub(playback.actorRootLocalRestoreReadback,playback.actorRootRestorePosition))<=0.0001f;
+            const bool rotationRestored=actorIdentityValid &&
+                WriteBoneRotation(actorRoot.identity.object,playback.actorRootRestoreRotation) &&
+                ReadBoneRotation(actorRoot.identity.object,actorRoot.identity.native,playback.actorRootLocalRotationRestoreReadback) &&
+                bone_detail::Same(playback.actorRootLocalRotationRestoreReadback,playback.actorRootRestoreRotation);
+            const bool worldPositionRead=Position(playback.root,worldAfter);
+            const bool worldRotationRead=WorldRotation(playback.root,worldRotationAfter);
+            playback.actorRootLocalHandoffOk=positionRestored&&rotationRestored;
+            const bool actorRestored=actorIdentityValid && positionRestored && rotationRestored && worldPositionRead && worldRotationRead;
+            playback.actorRootStopWorldPositionError=ik::Length(ik::Sub(worldAfter,playback.actorRootWorldRestorePosition));
+            playback.actorRootStopWorldRotationError=RotationDelta(worldRotationAfter,playback.actorRootWorldRestoreRotation);
+            playback.actorRootWorldContextSame=worldPositionRead&&worldRotationRead&&
+                playback.actorRootStopWorldPositionError<=0.001f&&
+                playback.actorRootStopWorldRotationError<=ActorRootRotationReadbackToleranceDegrees;
+            playback.actorRootWorldStopReadback=worldAfter;
+            playback.actorRootWorldRotationStopReadback=worldRotationAfter;
+            playback.actorRootLocalRestored=actorRestored;
+            restored=restored && actorRestored;
         }
         playback.restore=restored;
         if (restored) playback.captured=false;
@@ -650,16 +977,22 @@ bool Stop() {
 }
 void Tick() {
     if (!enabled.load() || status.load()!=1) return;
-    if (!OwnerIdentity()) { playback.fault=1; enabled=false; status=3; return; }
+    if (!OwnerIdentity()) { playback.identityRejected=true; playback.fault=1; enabled=false; status=3; return; }
+    if (!FreezeActorRoot()) { playback.fault=8; enabled=false; status=3; return; }
     const auto tick=GetTickCount64();
     const auto stage=basis::FkTest(abSettings)?basis::FkStage(tick-playback.startTick,abSettings.pose):abSettings.enabled&&abSettings.pose==basis::Pose::Sequence?basis::Stage(tick-playback.startTick):0;
     const auto settings=basis::FkTest(abSettings)?basis::FkStageSettings(stage,abSettings):abSettings.enabled&&abSettings.pose==basis::Pose::Sequence?basis::StageSettings(stage):abSettings;
     // 连续预览只在首次跨过 0/30/120 时各采样一帧精确参考，随后立即继续时间轴。
     const double frame=basis::SampleFrame(settings,tick-playback.startTick,!playback.abSnapshots[stage].valid);
     progressSeconds.store(float(frame/30.0),std::memory_order_relaxed);
-    if (frame>clip.lastFrame) { enabled=false; status=2; return; }
+    if (frame>clip.lastFrame) {
+        if (!WriteRootMotion(clip.lastFrame)) { playback.fault=7; status=3; }
+        else status=2;
+        enabled=false; return;
+    }
     LARGE_INTEGER begin{},end{}; QueryPerformanceCounter(&begin);
     if(!settings.enabled||settings.route==basis::Route::Legacy)SourcePose(frame,settings);
+    if (!WriteRootMotion(frame)) { playback.fault=7; enabled=false; status=3; return; }
     const auto blend=abSettings.enabled?1.0f:std::min(1.0f,float(tick-playback.startTick)/350.0f);
     Quaternion rootWorld{};
     if (!WorldRotation(playback.root,rootWorld)) {playback.fault=5;enabled=false;status=3;return;}
@@ -705,6 +1038,15 @@ void Tick() {
             (!BoneIdentity(bone)||!ReadBoneRotation(bone.identity.object,bone.identity.native,playback.abSnapshots[stage].fingerBefore[finger]))) {
             playback.fault=6;enabled=false;status=3;return;
         }
+        // Capture the game's local rotation immediately before Poser overwrites
+        // it. Ordinary bones are not world-frozen, so this is the valid stop
+        // handoff even when locomotion changes during the dance.
+        Quaternion nativeHandoff{};
+        if (!ReadBoneRotation(bone.identity.object,bone.identity.native,nativeHandoff)) {
+            playback.fault=2; enabled=false; status=3; return;
+        }
+        bone.nativeHandoffRotation=nativeHandoff;
+        bone.nativeHandoffValid=true;
         bone.touched=true;
         if (!BoneIdentity(bone) || !WriteBoneRotation(bone.identity.object,desiredLocal) || !ReadBoneRotation(bone.identity.object,bone.identity.native,after) || !bone_detail::Same(after,desiredLocal)) {
             playback.fault=2; enabled=false; status=3; return;
@@ -749,9 +1091,9 @@ void Tick() {
 void Q(std::ostream& out,const Quaternion& q) { out << '(' << q.x << ',' << q.y << ',' << q.z << ',' << q.w << ')'; }
 }
 void ConfigureMotionMode() { configured=true; }
-bool ConfigureFootIK(float units) {if (!std::isfinite(units)||units<=0||units>1) return false;ikUnits=units;footIK=true;return true;}
 bool IsMotionMode() { return configured.load(); }
 bool MotionRigArmed() { return playback.armed; }
+bool MotionIdentityRejected() { return playback.identityRejected; }
 bool ConfigureMotionAB(const std::filesystem::path& directory,std::ostream& report) {
     if (enabled.load()||playback.captured) return false;
     abOutput=directory;basis::Settings next;
@@ -782,9 +1124,10 @@ bool ConfigureMotionAB(const std::filesystem::path& directory,std::ostream& repo
     }
     abSettings=next;
     if (!clip.tracks.empty()&&playback.referenceReady) BuildSources();
+    const auto modelFrame=!next.enabled||basis::FkTest(next);
     report<<"[MMD_TOOLS_BASIS_AB_TEST] enabled="<<next.enabled<<" route="<<basis::RouteName(next.route)<<" pose="<<basis::PoseName(next.pose)<<" frame="<<next.frame
-        <<" axes="<<(basis::FkTest(next)?"FK_MODEL_Y_180":"MMD_XYZ_TO_UNITY_MODEL_XYZ")
-        <<"; axis_alignment="<<(basis::FkTest(next)?"STATIC_GEOMETRY_GATED_VISUAL_CHECK_REQUIRED":"EXPERIMENT_ASSUMPTION")
+        <<" axes="<<(basis::FkTest(next)?"FK_MODEL_Y_180":modelFrame?"MODEL_Y_180":"MMD_XYZ_TO_UNITY_MODEL_XYZ")
+        <<"; axis_alignment="<<(modelFrame?"STATIC_GEOMETRY_GATED_VISUAL_CHECK_REQUIRED":"EXPERIMENT_ASSUMPTION")
         <<"; IK="<<(next.enabled?"OFF":footIK?"CONFIGURED":"OFF")<<"; source_frame0=PRESERVED\n";
     report.flush();return true;
 }
@@ -821,7 +1164,7 @@ void ReportMotionFK(std::ostream& report) {
             <<"\",\"pose\":\""<<basis::PoseName(snapshot.settings.pose)<<"\",\"frame\":"<<snapshot.frame<<",\"last_frame\":"<<snapshot.lastFrame<<",\"stage\":"<<stage<<",\"axis_bone\":"<<snapshot.settings.axisBone<<",\"axis\":"<<snapshot.settings.axis
             <<",\"frames\":"<<snapshot.frames<<",\"writes\":"<<snapshot.writes<<",\"fault\":"<<playback.fault<<",\"restore\":"<<(playback.restore?"true":"false")
             <<",\"restored_bones\":"<<playback.restoredBones<<",\"avatar_reference_ready\":"<<(playback.avatarReady?"true":"false")
-            <<",\"axis_alignment\":\"FK_MODEL_Y_180\",\"body_axis_alignment\":\"MODEL_Y_180\",\"finger_axis_alignment\":\"MODEL_Y_180\",\"finger_test_scope\":\"BOTH_HANDS_BY_DIGIT\",\"translation\":\"NOT_WRITTEN\",\"IK\":false,\"root_motion\":false,\"bones\":[";
+            <<",\"axis_alignment\":\"FK_MODEL_Y_180\",\"body_axis_alignment\":\"MODEL_Y_180\",\"finger_axis_alignment\":\"MODEL_Y_180\",\"finger_test_scope\":\"BOTH_HANDS_BY_DIGIT\",\"translation\":\"ROOT_BIP001_LOCAL\",\"IK\":false,\"root_motion\":true,\"root_motion_scale\":"<<VmdPositionScale<<",\"bones\":[";
         bool first=true;
         for(unsigned order=0;order<playback.boneCount;++order) {
             const auto index=playback.order[order];const auto& bone=playback.bones[index];if(!bone.write)continue;
@@ -1011,7 +1354,13 @@ bool ArmMotionRig(const RigCalls& calls,uintptr_t root,uintptr_t renderer,uintpt
     if (playback.root<0) { FreeRoots(); return false; }
     std::sort(playback.order,playback.order+playback.boneCount,[](unsigned a,unsigned b){return playback.bones[a].depth<playback.bones[b].depth;});
     playback.left=Named(L"Bip001 L UpperArm"); playback.right=Named(L"Bip001 R UpperArm"); playback.head=Named(L"Bip001 Head");
-    QueryPerformanceFrequency(&playback.frequency); playback.armed=true; return OwnerIdentity();
+    QueryPerformanceFrequency(&playback.frequency);
+    playback.identityRejected=false; playback.ownerFailure=OwnerFailure::None;
+    playback.ownerFailureIndex=UINT_MAX; playback.ownerFailureExpected=playback.ownerFailureObserved=0;
+    playback.armed=true;
+    const bool identityValid=OwnerIdentity();
+    playback.identityRejected=!identityValid;
+    return identityValid;
 }
 bool CaptureMotionRenderers(uintptr_t renderers,uint64_t count) {
     if (!OwnerIdentity()||playback.meshCount) return false;
@@ -1076,7 +1425,24 @@ bool LoadMotionClip(const std::filesystem::path& path,std::ostream& report,HANDL
     vmd::Clip loaded; std::string error;
     if (!vmd::Load(path,loaded,error,stop)) { report << "motion_load=REJECTED; reason=" << error << '\n'; report.flush(); return false; }
     report << "[VMD_FILE] bytes=" << loaded.bytes << " bone_keys=" << loaded.boneKeys << " tracks=" << loaded.tracks.size()
-        << " last_frame=" << loaded.lastFrame << " fps=30 camera_keys=" << loaded.cameraKeys << " morph_keys=" << loaded.morphKeys << '\n';
+        << " ik_tracks=" << loaded.ikTracks.size() << " last_frame=" << loaded.lastFrame << " fps=30 camera_keys=" << loaded.cameraKeys << " morph_keys=" << loaded.morphKeys << '\n';
+    for (const auto& track : loaded.ikTracks) {
+        char name[128]{}; WideCharToMultiByte(CP_UTF8,0,track.name.c_str(),-1,name,sizeof(name),nullptr,nullptr);
+        report << "[VMD_IK_TRACK] name=" << name << " keys=" << track.keys.size()
+            << " first_frame=" << (track.keys.empty()?0:track.keys.front().frame)
+            << " first_enabled=" << (!track.keys.empty()&&track.keys.front().enabled)
+            << " state_f0=" << vmd::SampleIkEnabled(loaded,track.name,0)
+            << " state_f30=" << vmd::SampleIkEnabled(loaded,track.name,30)
+            << " state_f120=" << vmd::SampleIkEnabled(loaded,track.name,120)
+            << " pre_first_default=ON events=";
+        const auto eventCount=std::min<size_t>(track.keys.size(),32);
+        for (size_t i=0;i<eventCount;++i) {
+            if (i) report << ',';
+            report << track.keys[i].frame << ':' << (track.keys[i].enabled?"ON":"OFF");
+        }
+        report << " events_truncated=" << (track.keys.size()>eventCount)
+            << " runtime_solver=DISABLED\n";
+    }
     if (loaded.tracks.empty() || !loaded.lastFrame) { report << "motion_load=REJECTED; reason=" << (loaded.tracks.empty()?"NO_BONE_TRACKS_CAMERA_OR_MORPH_ONLY":"STATIC_POSE_NO_TIMED_MOTION") << '\n'; report.flush(); return false; }
     char sourceModel[256]{};WideCharToMultiByte(CP_UTF8,0,loaded.model.c_str(),-1,sourceModel,sizeof(sourceModel),nullptr,nullptr);
     unsigned initialRotations=0,initialPositions=0,lateFirstKeys=0;
@@ -1099,11 +1465,15 @@ bool LoadMotionClip(const std::filesystem::path& path,std::ostream& report,HANDL
         report << "[VMD_START_BONE] name=" << name << " first_key=" << track.keys.front().frame << " rotation=";Q(report,rotation);
         report << " position=" << position.x << ',' << position.y << ',' << position.z << '\n';
     }
-    report << "motion_load=" << (playback.mapped && playback.writeBones?"READY":"REJECTED_UNMAPPED") << " mapped_tracks=" << playback.mapped
-        << " write_bones=" << playback.writeBones << " retarget=STATIC_MESH_BIND_REFERENCE; positions=NOT_WRITTEN; foot_IK=" << (abSettings.enabled?"EXCLUDED_AB_TEST":footIK?"ANALYTIC_TWO_BONE_PREVIEW":"NOT_SOLVED") << "; morphs=NOT_APPLIED\n";
+    const auto centerTrack=Track(L"センター"),grooveTrack=Track(L"グルーブ");
+    const bool rootTrack=HasRootMotionTrack();
+    report << "motion_load=" << ((playback.mapped && playback.writeBones)||rootTrack?"READY":"REJECTED_UNMAPPED") << " mapped_tracks=" << playback.mapped
+        << " write_bones=" << playback.writeBones << " controlled_bones=" << playback.controlledBones << " passthrough_bones=" << playback.passthroughBones
+        << " retarget=STATIC_MESH_BIND_REFERENCE; positions=ROOT_BIP001_LOCAL; root_motion=Center+Groove; center_track=" << centerTrack
+        << " groove_track=" << grooveTrack << " vmd_position_scale=" << VmdPositionScale << "; axis=MODEL_Y_180; foot_IK=" << (abSettings.enabled?"EXCLUDED_AB_TEST":footIK?"ANALYTIC_TWO_BONE_PREVIEW":"NOT_SOLVED") << "; morphs=NOT_APPLIED\n";
     if (footIK&&!abSettings.enabled) {
         unsigned legs=0;for (const auto& leg:playback.legs) legs+=leg.track>=0;
-        report << "foot_IK_legs=" << legs << " game_units_per_VMD_unit=" << ikUnits << " calibration=EXPLICIT_PREVIEW_PARAMETER; source_PMX_rest=NOT_AVAILABLE; D_grants=NOT_APPLIED\n";
+        report << "foot_IK_legs=" << legs << " game_units_per_VMD_unit=" << ikUnits << " calibration=STATIC_BIND_FRAME0_RELATIVE_TARGET; ik_toggle_tracks=CONSUMED; source_PMX_rest=NOT_AVAILABLE; D_grants=NOT_APPLIED\n";
         if (legs!=2) {report << "motion_load=REJECTED; reason=FOOT_IK_REQUIRES_BOTH_TARGET_CHAINS_AND_TRACKS\n";report.flush();return false;}
     }
     for (unsigned i=0;i<playback.sourceCount;++i) if (playback.sources[i].node>=0 && playback.bones[playback.sources[i].node].source==int(i)) {
@@ -1121,7 +1491,7 @@ bool LoadMotionClip(const std::filesystem::path& path,std::ostream& report,HANDL
             report<<"[FINGER_TRACK] source="<<name<<" node="<<source.node<<" present="<<(source.track>=0)<<" keys="<<(source.track>=0?clip.tracks[source.track].keys.size():0)<<'\n';
         }
     }
-    const auto ready=playback.mapped&&playback.writeBones&&!playback.auxiliaryRejected&&(!basis::FkTest(abSettings)||playback.fingersReady);
+    const auto ready=((playback.mapped&&playback.writeBones)||rootTrack)&&!playback.auxiliaryRejected&&(!basis::FkTest(abSettings)||playback.fingersReady);
     if (ready&&ui::Enabled()) ui::Motion(path.wstring(),unsigned(clip.tracks.size()),float(clip.lastFrame)/30);
     return ready;
 }
@@ -1137,18 +1507,62 @@ bool MotionMainStep(unsigned mode) {
     if (mode==6) { const auto passed=Stop(); FreeRoots(); return passed; }
     if (mode==8) return Stop();
     if (mode==9) return CaptureReference();
-    if (mode!=7 || !OwnerIdentity() || !playback.referenceReady || playback.captured || !playback.mapped || !playback.writeBones) return false;
+    if (mode==7) {
+        playback.identityRejected=false; playback.ownerFailure=OwnerFailure::None;
+        playback.ownerFailureIndex=UINT_MAX; playback.ownerFailureExpected=playback.ownerFailureObserved=0;
+    }
+    if (mode!=7 || !playback.referenceReady || playback.captured ||
+        ((!playback.mapped||!playback.writeBones)&&!HasRootMotionTrack())) return false;
+    if (!OwnerIdentity()) { playback.identityRejected=true; return false; }
     if(basis::FkTest(abSettings)) {
         if(playback.auxiliaryRejected||!playback.fingersReady||!playback.avatarReady||!playback.avatarHandle||reinterpret_cast<uintptr_t (*)(uintptr_t,uintptr_t)>(avatarGetter.entry)(playback.owner[2],avatarGetter.descriptor)!=playback.referenceAvatar)return false;
         uintptr_t native=0;if(!Read(playback.referenceAvatar+0x10,native)||native!=playback.referenceAvatarNative)return false;
     }
     const auto currentMesh=reinterpret_cast<uintptr_t (*)(uintptr_t,uintptr_t)>(meshGetter.entry)(playback.owner[1],meshGetter.descriptor);
-    if (currentMesh!=playback.referenceMeshObject||!Alive(currentMesh,playback.referenceMeshNative,referenceMeshClass)) return false;
+    if (currentMesh!=playback.referenceMeshObject||!Alive(currentMesh,playback.referenceMeshNative,referenceMeshClass)) {
+        playback.identityRejected=true;
+        return false;
+    }
     for (unsigned i=0;i<playback.boneCount;++i) if (playback.bones[i].identity.owned) {
         auto& bone=playback.bones[i];
-        if (!BoneIdentity(bone) || !ReadBoneRotation(bone.identity.object,bone.identity.native,bone.restoreRotation)) return false;
+        if (!BoneIdentity(bone) || !ReadBoneRotation(bone.identity.object,bone.identity.native,bone.restoreRotation)) {
+            playback.identityRejected=true;
+            return false;
+        }
     }
-    for (auto& bone:playback.bones) {bone.desiredWorld=bone.rest.rotation;bone.touched=false;bone.restoreChecked=false;bone.fingerWrites=0;bone.fingerMotion=0;}
+    for (auto& bone:playback.bones) {bone.desiredWorld=bone.rest.rotation;bone.touched=false;bone.restoreChecked=false;bone.nativeHandoffRotation=bone.restoreRotation;bone.nativeHandoffValid=false;bone.fingerWrites=0;bone.fingerMotion=0;}
+    playback.motionRoot=Named(L"Bip001");
+    if(playback.motionRoot<0||playback.motionRoot==playback.root||
+        playback.bones[playback.motionRoot].identity.parent!=playback.root||
+        !playback.bones[playback.motionRoot].identity.owned||
+        !LocalPosition(playback.motionRoot,playback.rootRestorePosition)) return false;
+    playback.rootNativePosition=playback.rootRestorePosition;playback.rootHandoffPosition=playback.rootRestorePosition;playback.rootWrittenPosition=playback.rootRestorePosition;playback.rootPositionCaptured=true;playback.rootPositionTouched=false;playback.rootPositionWrites=0;playback.rootNativeSamples=0;playback.rootNativeFirst=playback.rootRestorePosition;playback.rootNativeLast=playback.rootRestorePosition;playback.rootNativeMaxDelta=0;
+    if (!LocalPosition(playback.root,playback.actorRootRestorePosition) ||
+        !ReadBoneRotation(playback.bones[playback.root].identity.object,
+            playback.bones[playback.root].identity.native,playback.actorRootRestoreRotation)) return false;
+    playback.actorRootHandoffPosition=playback.actorRootRestorePosition;
+    playback.actorRootHandoffRotation=playback.actorRootRestoreRotation;
+    playback.actorRootNativeLast=playback.actorRootRestorePosition;
+    playback.actorRootNativeMaxDelta=0;
+    playback.actorRootWorldFirst={};playback.actorRootWorldLast={};playback.actorRootWorldMaxDelta=0;
+    playback.actorRootWorldRestorePosition={};playback.actorRootWorldHandoffPosition={};
+    if (!Position(playback.root,playback.actorRootWorldRestorePosition)) return false;
+    playback.actorRootWorldCaptured=true; playback.actorRootWorldTouched=false; playback.actorRootWorldMaxWriteError=0;
+    if (!WorldRotation(playback.root,playback.actorRootWorldRestoreRotation)) return false;
+    playback.actorRootWorldRotationCaptured=true; playback.actorRootWorldRotationTouched=false;
+    playback.actorRootWorldRotationMaxWriteError=0; playback.actorRootWorldRotationMaxDelta=0;
+    playback.motionRootWorldFirst={};playback.motionRootWorldLast={};playback.motionRootWorldMaxDelta=0;
+    playback.actorRootNativeSamples=0;
+    playback.actorRootPositionCaptured=true;
+    playback.actorRootPositionTouched=false;
+    playback.actorRootRotationCaptured=true;
+    playback.actorRootLocalRestored=false;
+    playback.actorRootLocalRestoreReadback={};
+    playback.actorRootLocalRotationRestoreReadback={0,0,0,1};
+    playback.ownerActiveAtStopCaptured=false;
+    playback.ownerActiveAtStop=false;
+    playback.actorRootLocalHandoffOk=false;
+    playback.actorRootWorldContextSame=false;
     if(!abSettings.enabled||abSettings.route==basis::Route::Legacy)SourcePose(0,abSettings);
     if (!PrepareIK()) return false;
     playback.frames=0; playback.writes=0; playback.restoredBones=0; playback.fault=0; playback.sampleCount=0; playback.maxTickMicroseconds=0;
@@ -1169,16 +1583,73 @@ void ReportMotion(std::ostream& report) {
     report<<"[AVATAR_REFERENCE] ready="<<playback.avatarReady<<" failure="<<playback.avatarFailure<<" nodes="<<playback.avatarCount<<" compared_body_binds="<<playback.avatarCompared
         <<" max_angle_deg="<<playback.avatarMaxAngle<<" max_position="<<playback.avatarMaxPosition<<" source=STATIC_AVATAR_DEFAULT_POSE; live_pose=RESTORE_ONLY\n";
     report << "[MOTION_REFERENCE] ready=" << playback.referenceReady << " bind_bones=" << playback.referenceBones << " failure_step=" << playback.referenceFailure
-        << " basis=STATIC_MESH_BIND; live_pose=RESTORE_ONLY; rotation_isolation=" << (abSettings.enabled?"FK_AND_STATIC_ANCESTORS_AFTER_LATEUPDATE":"ALL_BOUND_BONES_AFTER_LATEUPDATE") << "; translation_isolation=NOT_IMPLEMENTED; full_A_pose_isolation=NOT_CONFIRMED\n";
+        << " identity_rejected=" << playback.identityRejected
+        << " basis=STATIC_MESH_BIND; live_pose=RESTORE_ONLY; rotation_isolation=" << (abSettings.enabled?"FK_AND_STATIC_ANCESTORS_AFTER_LATEUPDATE":"VMD_TRACKS_AND_STATIC_ANCESTORS_AFTER_LATEUPDATE") << "; translation_isolation=ACTOR_ROOT_WORLD_SNAPSHOT_PLUS_ROOT_BIP001_LOCAL_HANDOFF; secondary_motion=UNTOUCHED_NATIVE_PASSTHROUGH; full_A_pose_isolation=NOT_CONFIRMED\n";
     report << std::setprecision(9) << "[MOTION] armed=" << playback.armed << " status=" << status.load() << " captured=" << playback.captured
         << " restore=" << playback.restore << " fault=" << playback.fault << " mapped=" << playback.mapped << " write_bones=" << playback.writeBones
         << " frames=" << playback.frames << " writes=" << playback.writes << " restored_bones=" << playback.restoredBones
-        << " GC_created=" << playback.rooted << " GC_freed=" << playback.freed << " max_tick_us=" << playback.maxTickMicroseconds << '\n';
+        << " GC_created=" << playback.rooted << " GC_freed=" << playback.freed << " max_tick_us=" << playback.maxTickMicroseconds
+        << " controlled_bones=" << playback.controlledBones << " passthrough_bones=" << playback.passthroughBones
+        << " root_position_captured=" << playback.rootPositionCaptured << " root_position_touched=" << playback.rootPositionTouched
+        << " root_position_writes=" << playback.rootPositionWrites << " root_restore=" << playback.rootNativePosition.x << ',' << playback.rootNativePosition.y << ',' << playback.rootNativePosition.z
+        << " root_handoff=" << playback.rootHandoffPosition.x << ',' << playback.rootHandoffPosition.y << ',' << playback.rootHandoffPosition.z
+        << " root_last_written=" << playback.rootWrittenPosition.x << ',' << playback.rootWrittenPosition.y << ',' << playback.rootWrittenPosition.z
+        << " root_native_samples=" << playback.rootNativeSamples << " root_native_first=" << playback.rootNativeFirst.x << ',' << playback.rootNativeFirst.y << ',' << playback.rootNativeFirst.z
+        << " root_native_last=" << playback.rootNativeLast.x << ',' << playback.rootNativeLast.y << ',' << playback.rootNativeLast.z
+        << " root_native_max_delta=" << playback.rootNativeMaxDelta << " root_isolation=LOCAL_BASELINE_PLUS_VMD_HANDOFF"
+        << " actor_root_captured=" << playback.actorRootPositionCaptured << " actor_root_touched=" << playback.actorRootPositionTouched
+        << " actor_root_samples=" << playback.actorRootNativeSamples << " actor_root_restore=" << playback.actorRootRestorePosition.x << ',' << playback.actorRootRestorePosition.y << ',' << playback.actorRootRestorePosition.z
+        << " actor_root_handoff=" << playback.actorRootHandoffPosition.x << ',' << playback.actorRootHandoffPosition.y << ',' << playback.actorRootHandoffPosition.z
+        << " actor_root_local_rotation_captured=" << playback.actorRootRotationCaptured
+        << " actor_root_local_rotation_restore=" << playback.actorRootRestoreRotation.x << ',' << playback.actorRootRestoreRotation.y << ',' << playback.actorRootRestoreRotation.z << ',' << playback.actorRootRestoreRotation.w
+        << " actor_root_local_rotation_handoff=" << playback.actorRootHandoffRotation.x << ',' << playback.actorRootHandoffRotation.y << ',' << playback.actorRootHandoffRotation.z << ',' << playback.actorRootHandoffRotation.w
+        << " actor_root_local_restore_ok=" << playback.actorRootLocalRestored
+        << " actor_root_local_restore_readback=" << playback.actorRootLocalRestoreReadback.x << ',' << playback.actorRootLocalRestoreReadback.y << ',' << playback.actorRootLocalRestoreReadback.z
+        << " actor_root_local_rotation_restore_readback=" << playback.actorRootLocalRotationRestoreReadback.x << ',' << playback.actorRootLocalRotationRestoreReadback.y << ',' << playback.actorRootLocalRotationRestoreReadback.z << ',' << playback.actorRootLocalRotationRestoreReadback.w
+        << " actor_root_native_max_delta=" << playback.actorRootNativeMaxDelta << " actor_root_isolation=LOCAL_SNAPSHOT_FREEZE"
+        << " actor_root_world_first=" << playback.actorRootWorldFirst.x << ',' << playback.actorRootWorldFirst.y << ',' << playback.actorRootWorldFirst.z
+        << " actor_root_world_last=" << playback.actorRootWorldLast.x << ',' << playback.actorRootWorldLast.y << ',' << playback.actorRootWorldLast.z
+        << " actor_root_world_captured=" << playback.actorRootWorldCaptured
+        << " actor_root_world_touched=" << playback.actorRootWorldTouched
+        << " actor_root_world_restore=" << playback.actorRootWorldRestorePosition.x << ',' << playback.actorRootWorldRestorePosition.y << ',' << playback.actorRootWorldRestorePosition.z
+        << " actor_root_world_handoff=" << playback.actorRootWorldHandoffPosition.x << ',' << playback.actorRootWorldHandoffPosition.y << ',' << playback.actorRootWorldHandoffPosition.z
+        << " actor_root_world_samples=" << playback.actorRootNativeSamples
+        << " actor_root_world_max_delta=" << playback.actorRootWorldMaxDelta
+        << " actor_root_world_max_write_error=" << playback.actorRootWorldMaxWriteError
+        << " actor_root_world_rotation_captured=" << playback.actorRootWorldRotationCaptured
+        << " actor_root_world_rotation_touched=" << playback.actorRootWorldRotationTouched
+        << " actor_root_world_rotation_restore=" << playback.actorRootWorldRestoreRotation.x << ',' << playback.actorRootWorldRestoreRotation.y << ',' << playback.actorRootWorldRestoreRotation.z << ',' << playback.actorRootWorldRestoreRotation.w
+        << " actor_root_world_rotation_handoff=" << playback.actorRootWorldHandoffRotation.x << ',' << playback.actorRootWorldHandoffRotation.y << ',' << playback.actorRootWorldHandoffRotation.z << ',' << playback.actorRootWorldHandoffRotation.w
+        << " actor_root_world_rotation_max_delta_deg=" << playback.actorRootWorldRotationMaxDelta
+        << " actor_root_world_rotation_max_write_error_deg=" << playback.actorRootWorldRotationMaxWriteError
+        << " actor_root_handoff_space=ACTOR_LOCAL_BASELINE"
+        << " bone_rotation_handoff=LATEST_PRE_WRITE_LOCAL"
+        << " actor_root_world_stop_delta_from_start=" << playback.actorRootStopWorldPositionError
+        << " actor_root_world_stop_readback=" << playback.actorRootWorldStopReadback.x << ',' << playback.actorRootWorldStopReadback.y << ',' << playback.actorRootWorldStopReadback.z
+        << " actor_root_world_rotation_stop_delta_from_start_deg=" << playback.actorRootStopWorldRotationError
+        << " actor_root_world_rotation_stop_readback=" << playback.actorRootWorldRotationStopReadback.x << ',' << playback.actorRootWorldRotationStopReadback.y << ',' << playback.actorRootWorldRotationStopReadback.z << ',' << playback.actorRootWorldRotationStopReadback.w
+        << " owner_active_at_stop_captured=" << playback.ownerActiveAtStopCaptured << " owner_active_at_stop=" << playback.ownerActiveAtStop
+        << " actor_root_local_handoff_ok=" << playback.actorRootLocalHandoffOk
+        << " actor_root_world_context_same=" << playback.actorRootWorldContextSame
+        << " motion_root_world_first=" << playback.motionRootWorldFirst.x << ',' << playback.motionRootWorldFirst.y << ',' << playback.motionRootWorldFirst.z
+        << " motion_root_world_last=" << playback.motionRootWorldLast.x << ',' << playback.motionRootWorldLast.y << ',' << playback.motionRootWorldLast.z
+        << " motion_root_world_max_delta=" << playback.motionRootWorldMaxDelta
+        << " root_actor_index=" << playback.root << " root_motion_index=" << playback.motionRoot
+        << " root_motion_name=Bip001 root_motion_scale=" << VmdPositionScale << '\n';
+    if (playback.ownerFailure!=OwnerFailure::None) {
+        static constexpr const char* ownerNames[]={"ActorTransform","Renderer","Animator","GameObject"};
+        report << "[MOTION_IDENTITY] rejected=" << playback.identityRejected << " reason=" << OwnerFailureName(playback.ownerFailure)
+            << " owner_index=" << playback.ownerFailureIndex;
+        if (playback.ownerFailureIndex<std::size(ownerNames)) report << " owner=" << ownerNames[playback.ownerFailureIndex];
+        report << " expected=0x" << std::hex << playback.ownerFailureExpected
+            << " observed=0x" << playback.ownerFailureObserved << std::dec << '\n';
+    }
     if (footIK) for (unsigned side=0;side<2;++side) {
         const auto& leg=playback.legs[side];
         report << "[FOOT_IK] side=" << side << " track=" << leg.track << " upper=" << leg.upper << " lower=" << leg.lower << " ticks=" << leg.ticks
-            << " clamped=" << leg.clamped << " max_residual=" << leg.maxResidual << " units=" << ikUnits << " IK_quaternion_writes=" << playback.ikWrites
-            << " failure_step=" << leg.failureStep << " last_upper=" << leg.lastUpper << " last_lower=" << leg.lastLower << " last_residual=" << leg.lastResidual << '\n';
+            << " clamped=" << leg.clamped << " enabled_ticks=" << leg.enabledTicks << " toggle_track=" << leg.toggleTrack << " max_residual=" << leg.maxResidual << " units=" << ikUnits << " IK_quaternion_writes=" << playback.ikWrites
+            << " failure_step=" << leg.failureStep << " last_upper=" << leg.lastUpper << " last_lower=" << leg.lastLower << " last_residual=" << leg.lastResidual
+            << " target_mode=STATIC_BIND_PLUS_VMD_FRAME0_DELTA\n";
     }
     for (unsigned i=0;i<playback.sampleCount;++i) {
         const auto& sample=playback.samples[i];

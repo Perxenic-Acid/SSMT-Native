@@ -40,7 +40,7 @@ Quaternion DeltaArm(const Quaternion& q) {
 namespace {
 RigCalls calls;
 NativeMethod getter, setter;
-NativeMethod localPositionGetter,worldPositionGetter,worldRotationGetter,localScaleGetter;
+NativeMethod localPositionGetter,localPositionSetter,worldPositionGetter,worldPositionSetter,worldRotationGetter,worldRotationSetter,localScaleGetter;
 bool geometryReady=false;
 uintptr_t parentEntry = 0, parentDescriptor = 0, activeEntry = 0, activeDescriptor = 0;
 struct Sample { unsigned mode; DWORD thread; uint64_t tick; Quaternion before, after; bool matched; };
@@ -254,7 +254,9 @@ bool WriteBoneRotation(uintptr_t object,const Quaternion& value) {
 bool InitializeBoneGeometry(GenshinNativeRuntime& runtime,std::ostream& report) {
     geometryReady=false;
     if (!Method(runtime,"Transform","get_localPosition",0,localPositionGetter) ||
+        !Method(runtime,"Transform","set_localPosition",1,localPositionSetter) ||
         !Method(runtime,"Transform","get_position",0,worldPositionGetter) ||
+        !Method(runtime,"Transform","set_position",1,worldPositionSetter) ||
         !Method(runtime,"Transform","get_rotation",0,worldRotationGetter)||!Method(runtime,"Transform","get_localScale",0,localScaleGetter)) return false;
     for (const auto& method : {localPositionGetter,worldPositionGetter,localScaleGetter}) {
         const auto internal=Relative(method.entry+28);
@@ -267,12 +269,40 @@ bool InitializeBoneGeometry(GenshinNativeRuntime& runtime,std::ostream& report) 
         report << "[VECTOR_ABI] " << method.name << " id=" << method.metadataId << " entry=0x" << std::hex << method.entry
             << " internal=0x" << internal << " consumer=0x" << consumer << std::dec << " RCX=sret RDX=this R8=descriptor; bytes=12\n";
     }
+    if (!Pattern(localPositionSetter.target,64,"48 8B FA 48 8B D9") ||
+        !native_detail::ValidateMethod(localPositionSetter.descriptor,calls.transformClass,localPositionSetter.metadataId,1,localPositionSetter.entry)) {
+        report << "geometry_blocker=local_position_setter_abi\n"; return false;
+    }
+    report << "[VECTOR_ABI] set_localPosition id=" << localPositionSetter.metadataId << " entry=0x" << std::hex
+        << localPositionSetter.entry << " target=0x" << localPositionSetter.target
+        << std::dec << " RCX=this RDX=Vector3_pointer R8=descriptor; bytes=12; setter=VERIFIED_WRAPPER\n";
+    if (!Pattern(worldPositionSetter.target,64,"48 8B FA 48 8B D9") ||
+        !native_detail::ValidateMethod(worldPositionSetter.descriptor,calls.transformClass,worldPositionSetter.metadataId,1,worldPositionSetter.entry)) {
+        report << "geometry_blocker=world_position_setter_abi\n"; return false;
+    }
+    report << "[VECTOR_ABI] set_position id=" << worldPositionSetter.metadataId << " entry=0x" << std::hex
+        << worldPositionSetter.entry << " target=0x" << worldPositionSetter.target
+        << std::dec << " RCX=this RDX=Vector3_pointer R8=descriptor; bytes=12; setter=VERIFIED_WRAPPER\n";
     const auto internalRotation=Relative(worldRotationGetter.entry+20);
     if (!Pattern(worldRotationGetter.entry,34,"48 89 CE 0F 57 C0 0F 11 01 48 89 D1 48 89 F2 E8 ?? ?? ?? ?? 48 89 F0") ||
         !Pattern(internalRotation,61,"0F 10 00 0F 11 07") ||
         !Pattern(Relative(internalRotation+39),47,"0F 28 00 48 8B C3 0F 11 03")) {report << "geometry_blocker=world_rotation_consumers\n";return false;}
     report << "[WORLD_ROTATION_ABI] entry=0x" << std::hex << worldRotationGetter.entry << " internal=0x" << internalRotation
         << std::dec << " RCX=sret RDX=this R8=descriptor; bytes=16\n";
+    if (!Method(runtime,"Transform","set_rotation",1,worldRotationSetter) ||
+        !Pattern(worldRotationSetter.target,64,"48 8B FA 48 8B D9") ||
+        !native_detail::ValidateMethod(worldRotationSetter.descriptor,calls.transformClass,worldRotationSetter.metadataId,1,worldRotationSetter.entry)) {
+        report << "geometry_blocker=world_rotation_setter_identity_or_wrapper\n"; return false;
+    }
+    const auto worldSetNative=Relative(worldRotationSetter.target+47);
+    // set_rotation 的 native consumer 不是 localRotation setter 的同一内部布局；
+    // 只核验 wrapper 跳转目标和 Quaternion 指针入口，避免把无关偏移误当 ABI。
+    if (!worldSetNative || !Pattern(worldSetNative,48,"0F 10 1A")) {
+        report << "geometry_blocker=world_rotation_setter_native_entry\n"; return false;
+    }
+    report << "[WORLD_ROTATION_SETTER_ABI] id=" << worldRotationSetter.metadataId << " entry=0x" << std::hex
+        << worldRotationSetter.entry << " target=0x" << worldRotationSetter.target << " native=0x" << worldSetNative
+        << std::dec << " RCX=this RDX=Quaternion_pointer R8=descriptor; bytes=16; consumer=DEFERRED_LIVE_READBACK\n";
     geometryReady=true; return true;
 }
 bool ReadBonePosition(uintptr_t object,uintptr_t expectedNative,Vector3& out,bool world) {
@@ -290,6 +320,24 @@ bool ReadBonePosition(uintptr_t object,uintptr_t expectedNative,Vector3& out,boo
     }
     out=buffer.value; return true;
 }
+bool WriteBonePosition(uintptr_t object,const Vector3& value) {
+    uintptr_t native=0;
+    if (!geometryReady || !Read(object+0x10,native) || !Alive(object,calls.transformClass,native) ||
+        !std::isfinite(value.x) || !std::isfinite(value.y) || !std::isfinite(value.z)) return false;
+    constexpr uint32_t canary=0xA4C31E79;
+    struct Buffer { uint32_t first; Vector3 value; uint32_t last; } buffer{canary,value,canary};
+    reinterpret_cast<void (*)(uintptr_t,const Vector3*,uintptr_t)>(localPositionSetter.entry)(object,&buffer.value,localPositionSetter.descriptor);
+    return buffer.first==canary && buffer.last==canary;
+}
+bool WriteBoneWorldPosition(uintptr_t object,const Vector3& value) {
+    uintptr_t native=0;
+    if (!geometryReady || !Read(object+0x10,native) || !Alive(object,calls.transformClass,native) ||
+        !std::isfinite(value.x) || !std::isfinite(value.y) || !std::isfinite(value.z)) return false;
+    constexpr uint32_t canary=0xB7A24C19;
+    struct Buffer { uint32_t first; Vector3 value; uint32_t last; } buffer{canary,value,canary};
+    reinterpret_cast<void (*)(uintptr_t,const Vector3*,uintptr_t)>(worldPositionSetter.entry)(object,&buffer.value,worldPositionSetter.descriptor);
+    return buffer.first==canary && buffer.last==canary;
+}
 bool ReadBoneScale(uintptr_t object,uintptr_t expectedNative,Vector3& out) {
     if(!geometryReady||!Alive(object,calls.transformClass,expectedNative))return false;
     constexpr uint32_t canary=0x92FA372B;
@@ -305,6 +353,14 @@ bool ReadBoneWorldRotation(uintptr_t object,uintptr_t expectedNative,Quaternion&
     const auto returned=reinterpret_cast<Quaternion* (*)(Quaternion*,uintptr_t,uintptr_t)>(worldRotationGetter.entry)(&buffer.value,object,worldRotationGetter.descriptor);
     if (returned!=&buffer.value || buffer.first!=Canary || buffer.last!=Canary || !bone_detail::Valid(buffer.value)) return false;
     out=buffer.value; return true;
+}
+bool WriteBoneWorldRotation(uintptr_t object,const Quaternion& value) {
+    uintptr_t native=0;
+    if (!geometryReady || !bone_detail::Valid(value) || !Read(object+0x10,native) || !Alive(object,calls.transformClass,native)) return false;
+    constexpr uint64_t Canary=0xC7351D90A4E26B81ull;
+    struct Buffer { uint64_t first; Quaternion value; uint64_t last; } buffer{Canary,value,Canary};
+    reinterpret_cast<void (*)(uintptr_t,const Quaternion*,uintptr_t)>(worldRotationSetter.entry)(object,&buffer.value,worldRotationSetter.descriptor);
+    return buffer.first==Canary && buffer.last==Canary;
 }
 bool BoneWriteApplied() { return test.applied; }
 void ConfigureArmExperiment() { test.arm=true; }

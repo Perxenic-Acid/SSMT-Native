@@ -7,7 +7,7 @@ Transform 实例，读取 GameObject.name，并交叉验证 childCount getter。
 匹配，以及默认不触发的单骨旋转研究；ScriptRunBehaviourLateUpdate 返回后的两轮
 左上臂变化 / 恢复已有用户视觉确认，历史 Head 4°视觉结果仍未确认。
 动态 VMD FK 加载 / 播放 / 停止代码已通过本地验证，实机反馈指出足 IK 缺失。
-新增自动只读采集和两骨足 IK 预览，仍需实机校准，不宣称完整 MMD retarget。
+新增自动只读采集。分析式两骨足 IK 因实机画面失败已禁用；后续接入应使用游戏/Animator 的 IK 路径。
 
 插件只通过现有 PluginHost ABI v2 工作，不依赖 Player Tweaks，不修改 3DMigoto，
 没有前端页面或渲染回调。只有插件已安装且为 GIMI 启用时进入现有启动计划。
@@ -201,15 +201,20 @@ VMD 0002 解析检查文件边界、计数、帧号、有限数与有效 Quatern
 Unicode，排序 / 去重后按 30 FPS 采样贝塞尔时间曲线和 Quaternion Slerp。
 相机 / 表情文件可解析，但没有骨骼轨道时拒绝开始角色播放。
 采用标准 MMD 主体 / 手指 FK 层级与目标 Mesh 的静态 bind reference；这是动作预览，
-默认 FK 不求解足 IK；尚未实现完整 PMX bind pose / 附加轴转换、root 位移、表情、物理或相机播放。
+默认 FK 不求解足 IK。当前 `全ての親 -> センター -> グルーブ` 位移按 `MODEL_Y_180`
+组合后写入已核验的 `Bip001.localPosition`，并在停止时交还原生位置；比例仍需按实际
+PMX/实机轴测校准。未被 VMD 接管的蒙皮骨不再被默认静态写回，以便游戏原生二次运动继续运行。
+完整 PMX bind pose / 附加轴转换、表情、足 D、Grant、脚趾 IK、简易物理和相机播放仍未实现；
+VMD 文件中的 IK 开关轨道已解析；分析式两骨足求解当前禁用，不能用于实际播放。
 
 播放前只读捕获 `Mesh.bindposes`，核验 descriptor、wrapper / native consumer 的 Matrix4x4
 SZARRAY 返回与 64 字节复制布局，并与 native bind 数据逐项比较。只接受有限、可逆、
 无 shear、正 scale 的矩阵；skin 索引必须完整匹配，Body 模型空间必须与所选 Actor 对齐。
 矩阵按值保存，临时 Mesh / 数组 GC roots 即时释放，失败时拒绝播放，禁止回退到当前待机动作。
 旋转基准与恢复快照分开：VMD 绝对采样作用于静态绑定旋转，现场旋转只用于停止恢复。
-没有 VMD 轨道的蒙皮骨也覆盖绑定旋转并跟随已控制父骨；未蒙皮桥接骨的真实父旋转用于
-计算 localRotation，以抵消其动画旋转。仍未覆盖骨骼 localPosition / scale 或禁用全部姿态系统，
+有 VMD 轨道的骨骼及其静态父链覆盖绑定旋转；未接管的蒙皮骨保留原生 localRotation，
+由游戏自身的动画/物理系统决定。未蒙皮桥接骨的真实父旋转仍用于计算 localRotation，
+以抵消其动画旋转。除 `Bip001.localPosition` 外仍未覆盖骨骼 localPosition / scale 或禁用全部姿态系统，
 因此不能声称已完全屏蔽游戏动画、物理和叠加效果。完整 A-pose 隔离与 PMX 轴校准继续待办。
 模型的 bind pose 是否为 A-pose 必须从实际数据核验，不能由名称或单位 Quaternion 假定。
 
@@ -219,19 +224,11 @@ VMD 第 0 帧可以包含非单位旋转与非零位移，它代表开场动作�
 源 PMX 的静止姿态 / 骨轴与目标 Mesh 的 A-pose 是两套参考；当前标准 MMD 层级未取得源 PMX
 reference，不能由首帧反推出模型基准。需要独立核验源 / 目标参考转换和 IK / center 位移关系。
 
-诊断目录 `foot_ik_scale.txt` 可显式配置正数、最大为 1 的“游戏单位 / VMD 位移单位”，
-武装当前实验两骨 IK：按各轴贝塞尔曲线采样左右足 IK 位置，以静态 bind 脚位置为锚点，
-实读目标 Thigh→Calf→Foot 的世界坐标和长度，解析求解膝 / 脚目标，写入大腿、
-小腿、脚的 localRotation 并逐次回读。腿长度比例从实际腿长与静态绑定骨长对照；
-膝盖方向采用静态绑定弯曲面；退化时
-采用 Actor 局部 +Z。超出骨长范围的目标投影到可达范围，不拉伸骨骼。
-验证实际脚坐标与投影目标的残差及腿长稳定性，失效即停止并恢复。
-新位置 / 世界旋转 getter 均经当前样本 wrapper / native consumer ABI 校验，局部位置
-与原生 TRS 字段对照，输出缓冲区带 canary。没有位置 setter 或 Actor root 位移写入。
+历史实验曾通过诊断目录 `foot_ik_scale.txt` 配置“游戏单位 / VMD 位移单位”，并以分析式两骨解算写入大腿、小腿、脚旋转。实机反馈为腿部严重变形，且会以残差故障中断；该入口现已禁用。位置 / 世界旋转 getter 与 `Transform.set_localPosition` 均经当前样本 wrapper / native
+consumer ABI 校验，局部位置与原生 TRS 字段对照，输出缓冲区带 canary。根位移只写入
+已经核验的 `Bip001`，不直接写 Actor Root。
 
-该 IK 是带显式位移比例的预览：VMD 不包含源 PMX 骨长和 rest pose；没有完整
-PMX grant / 足 D 骨修正、IK 开关轨道、脚趾 IK 或 root / center 位移，不能宣称还原源舞蹈。
-报告分开记录 FK / IK quaternion 写入、两腿长度、求解次数、不可达目标数和最大脚位置残差。
+VMD 不包含源 PMX 骨长和 rest pose；没有完整 PMX grant / 足 D 骨修正、脚趾 IK 或源 PMX root 语义，不能宣称还原源舞蹈。IK 开关轨道仍被解析，但当前不触发游戏骨骼写入。目标 Unity `Animator` metadata 暴露 FBIK effector / chain API；它尚待在主线程上只读盘点 index、空间与调用时序后再接入。
 
 写入在已核验的 ScriptRunBehaviourLateUpdate 返回后执行，目标与桥接父骨持有强 root，
 每帧检查对象 / native / parent 身份并回读 localRotation；只写选定 Actor 的旋转。

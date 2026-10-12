@@ -9,6 +9,7 @@
 namespace poser::vmd {
 namespace {
 constexpr size_t MaxFile=256*1024*1024,MaxKeys=1000000,MaxTracks=4096;
+constexpr size_t MaxIkKeys=1000000;
 struct Reader {
     std::span<const uint8_t> data; size_t cursor=0;
     size_t Remaining() const { return data.size()-cursor; }
@@ -85,6 +86,17 @@ int FindTrack(const Clip& clip,std::wstring_view name) {
     for (size_t i=0;i<clip.tracks.size();++i) if (clip.tracks[i].name==name) return int(i);
     return -1;
 }
+int FindIkTrack(const Clip& clip,std::wstring_view name) {
+    for (size_t i=0;i<clip.ikTracks.size();++i) if (clip.ikTracks[i].name==name) return int(i);
+    return -1;
+}
+bool SampleIkEnabled(const Clip& clip,std::wstring_view name,double frame) {
+    const auto index=FindIkTrack(clip,name);
+    if (index<0 || clip.ikTracks[index].keys.empty()) return true;
+    const auto& keys=clip.ikTracks[index].keys;
+    const auto it=std::upper_bound(keys.begin(),keys.end(),frame,[](double value,const IkToggle& key){return value<key.frame;});
+    return it==keys.begin()?true:(*(it-1)).enabled;
+}
 Vector3 SamplePosition(const Track& track,double frame) {
     if (track.keys.empty()) return {};
     const Key* before=&track.keys.front(); const Key* after=before;
@@ -144,10 +156,34 @@ bool Parse(std::span<const uint8_t> bytes,Clip& out,std::string& error,HANDLE st
         reader.SkipOptional(9); // self shadow。
         if (reader.Remaining()) {
             clip.ikKeys=reader.Count(9);
+            std::unordered_map<std::wstring,int> ikTracks;
+            size_t ikKeyCount=0;
             for (uint32_t i=0;i<clip.ikKeys;++i) {
                 if (!(i%1024) && stop && WaitForSingleObject(stop,0)==WAIT_OBJECT_0) throw std::runtime_error("VMD_CANCELLED");
-                reader.Take(5); const auto count=reader.Count(21); reader.Take(size_t(count)*21);
+                const auto frame=reader.Value<uint32_t>();
+                if (frame>1080000) throw std::runtime_error("VMD_FRAME_LIMIT");
+                clip.lastFrame=std::max(clip.lastFrame,frame);
+                const auto show=reader.Value<uint8_t>();
+                if (show>1) throw std::runtime_error("VMD_IK_SHOW_INVALID");
+                const auto count=reader.Count(21);
+                for (uint32_t j=0;j<count;++j) {
+                    const auto name=reader.Text(20); const auto enabled=reader.Value<uint8_t>();
+                    if (name.empty()) throw std::runtime_error("VMD_IK_NAME_EMPTY");
+                    if (enabled>1) throw std::runtime_error("VMD_IK_ENABLED_INVALID");
+                    if (ikKeyCount==MaxIkKeys) throw std::runtime_error("VMD_IK_KEY_LIMIT");
+                    auto found=ikTracks.find(name);
+                    int track=found==ikTracks.end()?-1:found->second;
+                    if (track<0) {
+                        if (clip.ikTracks.size()>=MaxTracks) throw std::runtime_error("VMD_IK_TRACK_LIMIT");
+                        track=int(clip.ikTracks.size());
+                        clip.ikTracks.push_back({name,{}});
+                        ikTracks.emplace(name,track);
+                    }
+                    clip.ikTracks[size_t(track)].keys.push_back({frame,enabled!=0});
+                    ++ikKeyCount;
+                }
             }
+            for (auto& track:clip.ikTracks) std::stable_sort(track.keys.begin(),track.keys.end(),[](const IkToggle& a,const IkToggle& b){return a.frame<b.frame;});
         }
         if (reader.Remaining()) throw std::runtime_error("VMD_TRAILING_DATA");
         out=std::move(clip); return true;

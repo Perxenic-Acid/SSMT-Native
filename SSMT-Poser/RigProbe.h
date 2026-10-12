@@ -19,6 +19,9 @@ void ReleaseRigProbe(); // 仅由受保护的主线程 callback 调用。
 bool ExportRigProbe(const std::filesystem::path& directory, std::ostream& report);
 void SetRigWriteTarget(const std::wstring& name);
 bool RigHasTarget();
+bool RigTargetUnavailable();
+// 仅在 CaptureRig 已完成且主线程 callback 仍持有本轮根引用时使用。
+uintptr_t SelectedRigAnimator();
 void BeginRigSelection();
 int MatchRigCandidate(uintptr_t renderer); // 1=已配置 Actor 的活动 renderer，0=其他候选，-1=读取失败。
 }

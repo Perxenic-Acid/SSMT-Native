@@ -378,8 +378,43 @@ bool GenshinNativeRuntime::FindClass(const char* namespaze, const char* name, Na
         if (selected || !klass.address) return false;
         selected = &klass;
     }
-    if (!selected || !native_detail::ValidateClass(selected->address, selected->metadataRecord, selected->name, selected->methodCount)) return false;
-    result = *selected;
+    if (selected) {
+        if (!native_detail::ValidateClass(selected->address, selected->metadataRecord, selected->name, selected->methodCount)) return false;
+        result = *selected;
+        return true;
+    }
+
+    // The startup cache intentionally contains only the Unity primitives needed
+    // by the rig scanner. Game-owned components are resolved on demand from the
+    // same hash-gated metadata/class-cache pair instead of being guessed by RVA.
+    if (!initialized_ || !typeTable_ || !classCache_ || !strings_ || !name || !namespaze) return false;
+    NativeClass candidate;
+    bool found = false;
+    try {
+        for (uint32_t id = 0; id < typeCount_; ++id) {
+            const auto record = typeTable_ + size_t(id) * 70;
+            const auto encodedName = Read<uint32_t>(record + 0x14);
+            const auto nameToken = encodedName + uint32_t(0xE811F779);
+            if ((nameToken >> 24) != std::strlen(name)) continue;
+            const auto decodedName = Decode(nameToken, strings_);
+            if (decodedName != name) continue;
+            const auto decodedNamespace = Decode(Read<uint32_t>(record + 0x18) ^ 0x666769B5, strings_);
+            if (decodedNamespace != namespaze) continue;
+            if (found) return false;
+            candidate.metadataId = id;
+            candidate.name = decodedName;
+            candidate.namespaze = decodedNamespace;
+            candidate.metadataRecord = record;
+            candidate.methodStart = ~(Read<uint32_t>(record + 8) ^ 0xFB8750A6);
+            candidate.methodCount = Read<uint16_t>(record + 0x3C) ^ 0x8811;
+            if (candidate.methodStart > methodCount_ || candidate.methodCount > methodCount_ - candidate.methodStart) return false;
+            candidate.address = Read<uintptr_t>(classCache_ + size_t(id) * 8);
+            if (!candidate.address || !native_detail::ValidateClass(candidate.address, record, candidate.name, candidate.methodCount)) return false;
+            found = true;
+        }
+    } catch (...) { return false; }
+    if (!found) return false;
+    result = std::move(candidate);
     return true;
 }
 

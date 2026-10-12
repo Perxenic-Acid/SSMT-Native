@@ -14,6 +14,12 @@ inline float Length(Vector3 a) {return std::sqrt(Dot(a,a));}
 inline bool Finite(Vector3 a) {return std::isfinite(a.x)&&std::isfinite(a.y)&&std::isfinite(a.z);}
 inline Vector3 Unit(Vector3 a) {const auto n=Length(a);return n>1e-7f?Scale(a,1/n):Vector3{};}
 inline Vector3 Rotate(Quaternion q,Vector3 p) {const auto t=Scale(Cross({q.x,q.y,q.z},p),2);return Add(p,Add(Scale(t,q.w),Cross({q.x,q.y,q.z},t)));}
+inline Vector3 ModelPosition(Vector3 vmd) {return {-vmd.x,vmd.y,-vmd.z};}
+// 足 IK 目标与 Bip001 位移使用同一 Actor-local 参考。rootLocal 是本帧
+// Bip001.localPosition 的完整值，不能只传 VMD delta，否则会丢失原生启动基线。
+inline Vector3 Goal(Vector3 actorRoot,Quaternion actorRotation,Vector3 anchor,Vector3 ikDelta,float ikScale,Vector3 rootLocal) {
+    return Add(actorRoot,Rotate(actorRotation,Add(anchor,Add(Scale(ikDelta,ikScale),rootLocal))));
+}
 inline Quaternion FromTo(Vector3 from,Vector3 to) {
     from=Unit(from);to=Unit(to);const auto d=std::clamp(Dot(from,to),-1.0f,1.0f);
     auto axis=Cross(from,to);const auto sine=Length(axis);

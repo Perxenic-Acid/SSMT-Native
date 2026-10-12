@@ -11,11 +11,11 @@ struct MotionRigBone {
     wchar_t name[128]{};
 };
 void ConfigureMotionMode();
-bool ConfigureFootIK(float gameUnitsPerVmdUnit);
 bool IsMotionMode();
 bool ArmMotionRig(const RigCalls& calls,uintptr_t root,uintptr_t renderer,uintptr_t animator,
     std::span<const MotionRigBone> bones,uintptr_t activeEntry,uintptr_t activeDescriptor);
 bool MotionRigArmed();
+bool MotionIdentityRejected();
 // 主线程枚举数组仍持有 root 时，转交同 Actor 的全部 SMR；不要求网格含 Head。
 bool CaptureMotionRenderers(uintptr_t renderers,uint64_t count);
 void ExportMotionReferences(const std::filesystem::path& directory,std::ostream& report);
