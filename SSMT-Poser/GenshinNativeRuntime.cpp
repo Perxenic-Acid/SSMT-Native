@@ -587,4 +587,51 @@ bool GenshinNativeRuntime::FindMethod(const NativeClass& klass, const char* name
     result = std::move(selected);
     return true;
 }
+
+bool GenshinNativeRuntime::EnumerateMethods(const NativeClass& klass, std::vector<NativeMethod>& result) const {
+    result.clear();
+    try {
+        if (!initialized_ || !methodTable_ || !strings_ || !codeTable_ || !klass.address ||
+            !klass.methodCount || klass.methodStart > methodCount_ ||
+            klass.methodCount > methodCount_ - klass.methodStart) return false;
+        result.reserve(klass.methodCount);
+        for (uint32_t id = klass.methodStart; id < klass.methodStart + klass.methodCount; ++id) {
+            const auto record = methodTable_ + id * 26;
+            const auto key = MethodKey(id);
+            const auto count = uint8_t(Read<uint8_t>(record + 0x18) + 0x8C - uint8_t(key * 0x39036375));
+            if (((Read<uint32_t>(record + 0xE) ^ 0x0394729C) + key * 0xC6FC9C8B) != klass.metadataId)
+                return false;
+            NativeMethod method;
+            method.metadataId = id;
+            method.parameterCount = count;
+            method.name = Decode((Read<uint32_t>(record + 4) ^ 0x0613ACE3) + key * 0xC6FC9C8B, strings_);
+            if (method.name.empty()) return false;
+            method.entry = Read<uintptr_t>(codeTable_ + id * 8);
+            if (method.entry && Executable(method.entry)) {
+                method.target = method.entry;
+                if (Read<uint8_t>(method.entry) == 0xE9) {
+                    const auto target = Branch(method.entry);
+                    if (Executable(target)) method.target = target;
+                    else method.entry = method.target = 0;
+                }
+            } else {
+                // Abstract/internal methods remain useful to the census, but
+                // a null or non-executable code pointer is never callable.
+                method.entry = method.target = 0;
+            }
+            method.descriptor = Read<uintptr_t>(methodCache_ + id * 8);
+            if (!method.descriptor && klass.address) {
+                const auto methods = Read<uintptr_t>(klass.address + 0x58);
+                if (methods) method.descriptor = Read<uintptr_t>(methods + (id - klass.methodStart) * 8);
+            }
+            if (method.descriptor && !native_detail::ValidateMethod(method.descriptor, klass.address, id, count, Read<uintptr_t>(codeTable_ + id * 8)))
+                method.descriptor = 0;
+            result.push_back(std::move(method));
+        }
+        return true;
+    } catch (...) {
+        result.clear();
+        return false;
+    }
+}
 }

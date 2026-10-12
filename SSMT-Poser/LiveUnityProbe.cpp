@@ -144,7 +144,7 @@ struct Job {
     unsigned mode = 0;
     bool complete = false;
     std::array<Item, 3> items;
-    std::array<GroundCandidate, 8> groundCandidates{{
+    std::array<GroundCandidate, 14> groundCandidates{{
         {"MoleMole", "FootLockDragonIK"},
         {"MoleMole", "AnimageIKRig"},
         {"MoleMole", "EntityActor"},
@@ -153,6 +153,12 @@ struct Job {
         {"", "QuadrupedsGoundIK"},
         {"MoleMole", "MonoAnimationIKEventHelper"},
         {"VerletEngine", "DynamicBoneArray"},
+        {"", "HeightfieldDeformation"},
+        {"MoleMole", "MonoTransformChangeHelper"},
+        {"MoleMole", "MonoFlyAttachmentHelper"},
+        {"UnityEngine", "CapsuleCollider"},
+        {"UnityEngine", "MeshCollider"},
+        {"UnityEngine", "Rigidbody"},
     }};
 };
 // 任务数据常驻插件；各次 callback 只执行有界只读任务，不跨帧保留 managed 引用。
@@ -829,7 +835,19 @@ bool RunMotionSession(GenshinNativeRuntime& runtime,HANDLE stop,HMODULE module,W
                 passed=DispatchJob(stop,module,window,report,false);
                 ReportMotion(report);
                 ReportMotionAB(report);
-                report << "motion_stop=" << (passed?"RESTORED":"FAILED") << " prior_status=" << prior << '\n'; report.flush();
+                const auto stopOutcome=MotionStopOutcome();
+                const char* stopName=stopOutcome==MotionStopDisposition::Restored?"RESTORED":
+                    stopOutcome==MotionStopDisposition::OwnerInactiveSkipped?"OWNER_INACTIVE_SKIPPED":
+                    stopOutcome==MotionStopDisposition::IdentityLost?"IDENTITY_LOST":
+                    stopOutcome==MotionStopDisposition::RestoreFailed?"RESTORE_FAILED":"NOT_CAPTURED";
+                report << "motion_stop=" << stopName << " dispatch=" << (passed?"OK":"FAILED")
+                    << " prior_status=" << prior << '\n'; report.flush();
+                if (stopOutcome==MotionStopDisposition::OwnerInactiveSkipped ||
+                    stopOutcome==MotionStopDisposition::IdentityLost) {
+                    report << "motion_restore=SKIPPED_STALE_OR_INACTIVE_OWNER; old_rig=RELEASE_ONLY; rescan=1\n";
+                    clearStaleTarget("STOP_INACTIVE");
+                    staleActorRescan=true; rescan=true; passed=true; break;
+                }
                 if (prior==3) {
                     if (!job.fault && MotionIdentityRejected()) {
                         report << "motion_restore=UNAVAILABLE_STALE_ACTOR; old_rig=RELEASE_ONLY; rescan=1\n";
@@ -987,6 +1005,32 @@ bool Method(GenshinNativeRuntime& runtime, const char* owner, const char* name, 
     return runtime.FindClass("UnityEngine", owner, klass) && runtime.FindMethod(klass, name, parameters, result) &&
         result.descriptor && result.entry && result.target;
 }
+void ReportMethodCensus(GenshinNativeRuntime& runtime, const char* namespaze, const char* name,
+    std::ostream& report) {
+    NativeClass klass;
+    if (!runtime.FindClass(namespaze, name, klass)) return;
+    std::vector<NativeMethod> methods;
+    if (!runtime.EnumerateMethods(klass, methods)) {
+        report << "[IK_METHOD_CENSUS] " << namespaze << '.' << name
+            << " read=0 reason=METADATA_ENUMERATION_FAILED\n";
+        return;
+    }
+    report << "[IK_METHOD_CENSUS] " << namespaze << '.' << name
+        << " read=1 method_count=" << methods.size() << " invocation=NONE\n";
+    constexpr size_t MaxReportedMethods = 256;
+    for (size_t i = 0; i < methods.size() && i < MaxReportedMethods; ++i) {
+        const auto& method = methods[i];
+        report << "[IK_METHOD] " << namespaze << '.' << name << '.' << method.name
+            << " metadataId=" << method.metadataId
+            << " parameterCount=" << unsigned(method.parameterCount)
+            << " descriptor=" << (method.descriptor ? "VERIFIED" : "UNMATERIALIZED_OR_MISMATCH")
+            << " callable=" << (method.descriptor && method.entry && method.target ? "UNVERIFIED_ABI" : "NO")
+            << " invoked=NO\n";
+    }
+    if (methods.size() > MaxReportedMethods)
+        report << "[IK_METHOD_CENSUS] " << namespaze << '.' << name
+            << " methods_truncated=1 reported=" << MaxReportedMethods << '\n';
+}
 void Address(std::ostream& report, const char* key, uintptr_t value) { report << key << "=0x" << std::hex << value << std::dec << '\n'; }
 std::string Utf8(const wchar_t* text, int length) {
     const auto size = WideCharToMultiByte(CP_UTF8, 0, text, length, nullptr, 0, nullptr, nullptr);
@@ -1107,7 +1151,13 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
             << " resolved=" << candidate.resolved << " metadataId=" << (candidate.resolved ? klass.metadataId : 0)
             << " hierarchy_valid=" << candidate.hierarchyValid << " derives_Component=" << candidate.derivesComponent
             << " derives_Object=" << candidate.derivesObject << " base_chain=" << candidate.baseChain << '\n';
+        if (candidate.resolved)
+            ReportMethodCensus(runtime, candidate.namespaze, candidate.name, report);
     }
+    for (const auto& type : {std::pair{"MoleMole", "Miscs"},
+             std::pair{"UnityEngine", "Physics"}, std::pair{"UnityEngine", "PhysicsScene"},
+             std::pair{"UnityEngine", "Animator"}})
+        ReportMethodCensus(runtime, type.first, type.second, report);
     if (!Method(runtime, "Animator", "get_isHuman", 0, job.human) ||
         !Method(runtime, "SkinnedMeshRenderer", "get_rootBone", 0, job.rootBone) ||
         !Method(runtime, "SkinnedMeshRenderer", "get_bones", 0, job.bones) ||
@@ -1373,6 +1423,17 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
                         if (runtime.DescribeClass(type.klass, described)) {
                             report << " metadata_id=" << described.metadataId << " name="
                                 << (described.namespaze.empty() ? described.name : described.namespaze + "." + described.name);
+                            const auto fullName = described.namespaze.empty()
+                                ? described.name : described.namespaze + "." + described.name;
+                            const bool relevant = fullName.find("IK") != std::string::npos ||
+                                fullName.find("Foot") != std::string::npos ||
+                                fullName.find("Ground") != std::string::npos ||
+                                fullName.find("Heightfield") != std::string::npos ||
+                                fullName.find("AnimationIK") != std::string::npos ||
+                                fullName.find("Collider") != std::string::npos ||
+                                fullName.find("Rigidbody") != std::string::npos;
+                            if (relevant)
+                                ReportMethodCensus(runtime, described.namespaze.c_str(), described.name.c_str(), report);
                         } else {
                             report << " metadata_id=UNRESOLVED name=UNRESOLVED";
                         }

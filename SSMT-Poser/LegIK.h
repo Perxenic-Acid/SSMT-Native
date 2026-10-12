@@ -15,6 +15,37 @@ inline bool Finite(Vector3 a) {return std::isfinite(a.x)&&std::isfinite(a.y)&&st
 inline Vector3 Unit(Vector3 a) {const auto n=Length(a);return n>1e-7f?Scale(a,1/n):Vector3{};}
 inline Vector3 Rotate(Quaternion q,Vector3 p) {const auto t=Scale(Cross({q.x,q.y,q.z},p),2);return Add(p,Add(Scale(t,q.w),Cross({q.x,q.y,q.z},t)));}
 inline Vector3 ModelPosition(Vector3 vmd) {return {-vmd.x,vmd.y,-vmd.z};}
+// VMD foot targets are absolute model-space positions.  Keep the parent
+// track composition and MODEL_Y_180 conversion together so a future writer
+// cannot accidentally treat either track as a local offset.
+inline bool ModelTarget(Vector3 target,Vector3 parent,Vector3& out) {
+    if (!Finite(target)||!Finite(parent)) return false;
+    out=Add(ModelPosition(target),ModelPosition(parent));
+    return Finite(out);
+}
+// Derive a stable pole direction from the bind-time three-bone geometry.  A
+// nearly collinear chain is rejected instead of inventing a bend direction;
+// callers may then keep the write path disabled until a verified pole exists.
+inline bool PoleDirection(Vector3 hip,Vector3 knee,Vector3 foot,Vector3& out) {
+    if (!Finite(hip)||!Finite(knee)||!Finite(foot)) return false;
+    const auto leg=Sub(foot,hip); const auto length=Length(leg);
+    if (length<1e-6f) return false;
+    const auto direction=Scale(leg,1/length);
+    const auto bend=Sub(Sub(knee,hip),Scale(direction,Dot(Sub(knee,hip),direction)));
+    if (Length(bend)<1e-6f) return false;
+    out=Unit(bend);
+    return Finite(out)&&Length(out)>0.5f;
+}
+// Read-only ground calibration helper.  Both inputs must already be in the
+// same actor/world space; this only returns a candidate and never touches a
+// Unity Transform or terrain API.  MODEL_Y_180 uses +Y as up.
+inline bool GroundCandidate(Vector3 target,float groundY,float soleOffset,Vector3& out,bool& clamped) {
+    if (!Finite(target)||!std::isfinite(groundY)||!std::isfinite(soleOffset)) return false;
+    const auto floor=groundY+soleOffset;
+    out=target; clamped=target.y<floor;
+    if (clamped) out.y=floor;
+    return Finite(out);
+}
 // 足 IK 目标与 Bip001 位移使用同一 Actor-local 参考。rootLocal 是本帧
 // Bip001.localPosition 的完整值，不能只传 VMD delta，否则会丢失原生启动基线。
 inline Vector3 Goal(Vector3 actorRoot,Quaternion actorRotation,Vector3 anchor,Vector3 ikDelta,float ikScale,Vector3 rootLocal) {

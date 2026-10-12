@@ -3,6 +3,13 @@
 #include <iosfwd>
 
 namespace poser {
+enum class MotionStopDisposition : unsigned {
+    None,
+    Restored,
+    OwnerInactiveSkipped,
+    IdentityLost,
+    RestoreFailed,
+};
 struct MotionRigBone {
     uintptr_t object=0,native=0,parentNative=0;
     int parent=-1;
@@ -35,5 +42,6 @@ bool MotionMainStep(unsigned mode);
 void DisableMotionWrites();
 void MotionLateTick(); // SEH leaf，限定已核验 Unity 主线程。
 unsigned MotionStatus(); // 0=idle, 1=playing, 2=finished, 3=fault。
+MotionStopDisposition MotionStopOutcome();
 void ReportMotion(std::ostream& report);
 }

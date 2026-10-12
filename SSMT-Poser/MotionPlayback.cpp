@@ -98,6 +98,7 @@ struct Playback {
     OwnerFailure ownerFailure=OwnerFailure::None;
     unsigned ownerFailureIndex=UINT_MAX;
     uintptr_t ownerFailureExpected=0,ownerFailureObserved=0;
+    MotionStopDisposition stopDisposition=MotionStopDisposition::None;
     bool abReportPending=false;
     double lastFrame=0;
     ABSnapshot abSnapshots[MaxSnapshots];
@@ -260,6 +261,15 @@ const char* OwnerFailureName(OwnerFailure failure) {
     case OwnerFailure::NativeUnreadable: return "NATIVE_POINTER_UNREADABLE";
     case OwnerFailure::NativeMismatch: return "NATIVE_POINTER_CHANGED";
     case OwnerFailure::Inactive: return "ACTOR_INACTIVE";
+    default: return "NONE";
+    }
+}
+const char* StopDispositionName(MotionStopDisposition disposition) {
+    switch (disposition) {
+    case MotionStopDisposition::Restored: return "RESTORED";
+    case MotionStopDisposition::OwnerInactiveSkipped: return "OWNER_INACTIVE_SKIPPED";
+    case MotionStopDisposition::IdentityLost: return "IDENTITY_LOST";
+    case MotionStopDisposition::RestoreFailed: return "RESTORE_FAILED";
     default: return "NONE";
     }
 }
@@ -847,16 +857,16 @@ bool PrepareIK() {
         if (restUpper<0.0001f||restLower<0.0001f) return false;
         const auto scale=leg.upper/restUpper;
         if (std::fabs(leg.lower/restLower-scale)>scale*0.01f) return false;
-        const auto direction=ik::Unit(ik::Sub(restFoot,restHip)),first=ik::Sub(restKnee,restHip);
-        const auto bend=ik::Sub(first,ik::Scale(direction,ik::Dot(first,direction)));
-        leg.pole=ik::Unit(bend);
-        if (ik::Length(leg.pole)<0.5f) leg.pole={0,0,1};
+        // A collinear bind chain has no verified pole.  Do not invent one:
+        // the writer remains disabled until a game/native IK path supplies a
+        // valid bend plane.
+        if (!ik::PoleDirection(restHip,restKnee,restFoot,leg.pole)) return false;
         // VMD IK positions are model-space targets, not offsets from the
         // game's bind foot. Retarget motion relative to frame 0 so the
         // opening frame cannot double-apply its absolute target.
-        auto initialTarget=ik::ModelPosition(vmd::SamplePosition(clip.tracks[leg.track],0));
-        if (leg.parentTrack>=0) initialTarget=ik::Add(initialTarget,ik::ModelPosition(vmd::SamplePosition(clip.tracks[leg.parentTrack],0)));
-        leg.initialTarget=initialTarget;
+        const auto target=vmd::SamplePosition(clip.tracks[leg.track],0);
+        const auto parent=leg.parentTrack>=0?vmd::SamplePosition(clip.tracks[leg.parentTrack],0):Vector3{};
+        if (!ik::ModelTarget(target,parent,leg.initialTarget)) return false;
         leg.anchor=restFoot;
         leg.firstFoot=playback.bones[leg.foot].rest.rotation;
         leg.ticks=0;leg.clamped=0;leg.maxResidual=0;
@@ -872,8 +882,10 @@ bool SolveIK(double frame,float blend) {
         if (leg.track<0) continue;
         if (leg.toggleTrack>=0 && !vmd::SampleIkEnabled(clip,clip.ikTracks[size_t(leg.toggleTrack)].name,frame)) continue;
         ++leg.enabledTicks;
-        auto delta=ik::ModelPosition(vmd::SamplePosition(clip.tracks[leg.track],frame));
-        if (leg.parentTrack>=0) delta=ik::Add(delta,ik::ModelPosition(vmd::SamplePosition(clip.tracks[leg.parentTrack],frame)));
+        Vector3 delta{};
+        const auto target=vmd::SamplePosition(clip.tracks[leg.track],frame);
+        const auto parent=leg.parentTrack>=0?vmd::SamplePosition(clip.tracks[leg.parentTrack],frame):Vector3{};
+        if (!ik::ModelTarget(target,parent,delta)) return false;
         delta=ik::Sub(delta,leg.initialTarget);
         // Bip001 已在本帧先接管 Center/Groove 位移；足目标使用 setter
         // 回读的完整 localPosition，保留原生启动基线并跟随 VMD 位移。
@@ -917,11 +929,31 @@ void SourcePose(double frame,const basis::Settings& settings) {
 bool Stop() {
     enabled=false;
     bool restored=true;
+    playback.stopDisposition=MotionStopDisposition::None;
     if (playback.captured) {
-        restored=OwnerIdentity(false); playback.restoredBones=0;
-        playback.ownerActiveAtStopCaptured=restored;
-        playback.ownerActiveAtStop=restored&&reinterpret_cast<bool (*)(uintptr_t,uintptr_t)>(activeEntry)(playback.owner[3],activeDescriptor);
-        if (!restored) playback.identityRejected=true;
+        const bool ownerIdentityValid=OwnerIdentity(false);
+        playback.restoredBones=0;
+        playback.ownerActiveAtStopCaptured=ownerIdentityValid;
+        playback.ownerActiveAtStop=ownerIdentityValid&&reinterpret_cast<bool (*)(uintptr_t,uintptr_t)>(activeEntry)(playback.owner[3],activeDescriptor);
+        if (!ownerIdentityValid) {
+            // A switched/destroyed actor no longer has a safe Transform handoff.
+            // Do not write stale snapshots into a replacement object. The caller
+            // will release the old roots and rescan the current actor.
+            playback.identityRejected=true;
+            playback.stopDisposition=MotionStopDisposition::IdentityLost;
+            playback.fault=0;
+            restored=false;
+        } else if (!playback.ownerActiveAtStop) {
+            // Deactivation is a lifecycle boundary, not an IK or root-motion
+            // failure. The object may be hidden for a scene transition or be
+            // queued for destruction; writing the old pose here is unsafe.
+            playback.stopDisposition=MotionStopDisposition::OwnerInactiveSkipped;
+            playback.fault=0;
+            playback.restore=false;
+            playback.captured=false;
+            status=0;
+            return true;
+        }
         for (unsigned i=0;restored && i<playback.boneCount;++i) if (playback.bones[i].touched) {
             auto& bone=playback.bones[i]; Quaternion after{};
             const auto& handoff=bone.nativeHandoffValid?bone.nativeHandoffRotation:bone.restoreRotation;
@@ -931,7 +963,7 @@ bool Stop() {
             bone.restoreReadback=after;bone.restoreChecked=restored;
             if (restored) ++playback.restoredBones;
         }
-        if (playback.rootPositionTouched) {
+        if (playback.rootPositionTouched && ownerIdentityValid && playback.ownerActiveAtStop) {
             // Root translation has an independent setter and must be handed back
             // even when a rotation restore failed; otherwise a partial stop can
             // leave the actor displaced by the VMD track.
@@ -945,7 +977,8 @@ bool Stop() {
             if (rootRestored) playback.rootWrittenPosition=after;
             restored=restored && rootRestored;
         }
-        if (playback.actorRootWorldTouched || playback.actorRootWorldRotationTouched) {
+        if ((playback.actorRootWorldTouched || playback.actorRootWorldRotationTouched) &&
+            ownerIdentityValid && playback.ownerActiveAtStop) {
             auto& actorRoot=playback.bones[playback.root];
             Vector3 worldAfter{};
             Quaternion worldRotationAfter{};
@@ -978,13 +1011,27 @@ bool Stop() {
         }
         playback.restore=restored;
         if (restored) playback.captured=false;
+        if (ownerIdentityValid)
+            playback.stopDisposition=restored?MotionStopDisposition::Restored:MotionStopDisposition::RestoreFailed;
     }
     status=restored?0:3;
     return restored;
 }
 void Tick() {
     if (!enabled.load() || status.load()!=1) return;
-    if (!OwnerIdentity()) { playback.identityRejected=true; playback.fault=1; enabled=false; status=3; return; }
+    if (!OwnerIdentity()) {
+        enabled=false;
+        if (playback.ownerFailure==OwnerFailure::Inactive) {
+            // Treat actor deactivation as a lifecycle abort, not a playback or
+            // IK fault. Stop() will skip stale pose writes and release capture.
+            playback.stopDisposition=MotionStopDisposition::OwnerInactiveSkipped;
+            playback.fault=0;
+            status=2;
+        } else {
+            playback.identityRejected=true; playback.fault=1; status=3;
+        }
+        return;
+    }
     if (!FreezeActorRoot()) { playback.fault=8; enabled=false; status=3; return; }
     const auto tick=GetTickCount64();
     const auto stage=basis::FkTest(abSettings)?basis::FkStage(tick-playback.startTick,abSettings.pose):abSettings.enabled&&abSettings.pose==basis::Pose::Sequence?basis::Stage(tick-playback.startTick):0;
@@ -1598,6 +1645,7 @@ bool MotionMainStep(unsigned mode) {
     playback.actorRootLocalRotationRestoreReadback={0,0,0,1};
     playback.ownerActiveAtStopCaptured=false;
     playback.ownerActiveAtStop=false;
+    playback.stopDisposition=MotionStopDisposition::None;
     playback.actorRootLocalHandoffOk=false;
     playback.actorRootWorldContextSame=false;
     if(!abSettings.enabled||abSettings.route==basis::Route::Legacy)SourcePose(0,abSettings);
@@ -1612,6 +1660,7 @@ bool MotionMainStep(unsigned mode) {
 }
 void DisableMotionWrites() { enabled=false; }
 unsigned MotionStatus() { return status.load(); }
+MotionStopDisposition MotionStopOutcome() { return playback.stopDisposition; }
 void MotionLateTick() {
     __try { Tick(); }
     __except(EXCEPTION_EXECUTE_HANDLER) { playback.fault=GetExceptionCode(); enabled=false; status=3; }
@@ -1624,6 +1673,7 @@ void ReportMotion(std::ostream& report) {
         << " basis=STATIC_MESH_BIND; live_pose=RESTORE_ONLY; rotation_isolation=" << (abSettings.enabled?"FK_AND_STATIC_ANCESTORS_AFTER_LATEUPDATE":"VMD_TRACKS_AND_STATIC_ANCESTORS_AFTER_LATEUPDATE") << "; translation_isolation=ACTOR_ROOT_WORLD_SNAPSHOT_PLUS_ROOT_BIP001_LOCAL_HANDOFF; secondary_motion=UNTOUCHED_NATIVE_PASSTHROUGH; full_A_pose_isolation=NOT_CONFIRMED\n";
     report << std::setprecision(9) << "[MOTION] armed=" << playback.armed << " status=" << status.load() << " captured=" << playback.captured
         << " restore=" << playback.restore << " fault=" << playback.fault << " mapped=" << playback.mapped << " write_bones=" << playback.writeBones
+        << " stop_disposition=" << StopDispositionName(playback.stopDisposition)
         << " frames=" << playback.frames << " writes=" << playback.writes << " restored_bones=" << playback.restoredBones
         << " ik_writes=" << playback.ikWrites
         << " GC_created=" << playback.rooted << " GC_freed=" << playback.freed << " max_tick_us=" << playback.maxTickMicroseconds
@@ -1674,6 +1724,11 @@ void ReportMotion(std::ostream& report) {
         << " motion_root_world_max_delta=" << playback.motionRootWorldMaxDelta
         << " root_actor_index=" << playback.root << " root_motion_index=" << playback.motionRoot
         << " root_motion_name=Bip001 root_motion_scale=" << VmdPositionScale << '\n';
+    report << "[MOTION_STOP] disposition=" << StopDispositionName(playback.stopDisposition)
+        << " owner_identity_at_stop=" << playback.ownerActiveAtStopCaptured
+        << " owner_active_at_stop=" << playback.ownerActiveAtStop
+        << " writes_skipped=" << (playback.stopDisposition==MotionStopDisposition::OwnerInactiveSkipped || playback.stopDisposition==MotionStopDisposition::IdentityLost)
+        << " root_ik_acceptance=EXCLUDE_UNLESS_RESTORED\n";
     if (playback.ownerFailure!=OwnerFailure::None) {
         static constexpr const char* ownerNames[]={"ActorTransform","Renderer","Animator","GameObject"};
         report << "[MOTION_IDENTITY] rejected=" << playback.identityRejected << " reason=" << OwnerFailureName(playback.ownerFailure)

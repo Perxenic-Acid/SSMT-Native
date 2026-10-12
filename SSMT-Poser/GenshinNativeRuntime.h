@@ -35,6 +35,10 @@ public:
     bool FindClass(const char* namespaze, const char* name, NativeClass& result) const;
     bool FindMethod(const NativeClass& klass, const char* name, uint8_t parameters,
         NativeMethod& result) const;
+    // Read-only metadata census used to identify game-owned IK/ground entry
+    // points. The returned methods are descriptors only; callers must still
+    // independently validate any ABI before invoking one.
+    bool EnumerateMethods(const NativeClass& klass, std::vector<NativeMethod>& result) const;
     bool DescribeClass(uintptr_t address, NativeClass& result) const;
     bool ResolveCallContext(HANDLE stop, NativeCallContext& result, std::ostream& report) const;
     bool ResolveScriptLateUpdate(HANDLE stop, uintptr_t& result, std::ostream& report) const;
