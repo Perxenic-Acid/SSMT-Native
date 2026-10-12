@@ -19,6 +19,9 @@ struct MotionRigBone {
     wchar_t name[128]{};
 };
 void ConfigureMotionMode();
+// Configure the read-only foot target diagnostics. A valid positive scale
+// never enables writes; the native/game IK gate remains independent.
+void ConfigureFootIKDiagnostics(float units);
 bool IsMotionMode();
 bool ArmMotionRig(const RigCalls& calls,uintptr_t root,uintptr_t renderer,uintptr_t animator,
     std::span<const MotionRigBone> bones,uintptr_t activeEntry,uintptr_t activeDescriptor);

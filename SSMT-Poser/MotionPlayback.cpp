@@ -16,6 +16,8 @@
 #include <sstream>
 
 namespace poser {
+bool footIK=false;
+float ikUnits=0;
 namespace {
 constexpr unsigned MaxRig=256,MaxSources=128,MaxSamples=64,MaxSnapshots=16;
 constexpr unsigned MaxReferenceMeshes=64;
@@ -62,6 +64,12 @@ struct Leg {
     Quaternion firstFoot{0,0,0,1};
     float upper=0,lower=0,maxResidual=0,lastUpper=0,lastLower=0,lastResidual=0;
     unsigned ticks=0,enabledTicks=0,clamped=0,failureStep=0;
+    // These fields describe the safe target pipeline even while the actual
+    // writer is gated. They are POD state copied into the session report.
+    bool chainReady=false,targetReady=false,poleReady=false,groundReady=false;
+    bool groundClamped=false;
+    Vector3 targetFrame0{},targetFrame30{},targetFrame120{};
+    Vector3 groundFrame0{},groundFrame30{},groundFrame120{};
 };
 struct Sample { DWORD thread; uint64_t tick; double frame; unsigned matched; Quaternion left,right,head; };
 struct ABSnapshot {
@@ -179,11 +187,16 @@ std::atomic<unsigned> status{0};
 std::atomic<bool> enabled{false};
 std::atomic<bool> configured{false};
 std::atomic<float> progressSeconds{0};
-bool footIK=false;
-float ikUnits=0;
 basis::Settings abSettings;
 bool FootIKWritePathEnabled() {
     return AnalyticFootIkEnabled&&footIK&&!abSettings.enabled;
+}
+void ConfigureFootIKDiagnosticsImpl(float units) {
+    if (std::isfinite(units)&&units>0.0f&&units<=100.0f) {
+        footIK=true;ikUnits=units;
+    } else {
+        footIK=false;ikUnits=0.0f;
+    }
 }
 std::filesystem::path abOutput;
 std::atomic<unsigned> abStage{UINT_MAX};
@@ -618,7 +631,6 @@ void BuildSources() {
     }
     for (unsigned side=0;side<2;++side) {
         auto& leg=playback.legs[side];leg={};
-        if (!FootIKWritePathEnabled()) continue;
         const std::wstring prefix=side?L"右":L"左",target=side?L"Bip001 R ":L"Bip001 L ";
         leg.thigh=Named(target+L"Thigh");leg.calf=Named(target+L"Calf");leg.foot=Named(target+L"Foot");
         leg.track=Track(prefix+L"足ＩＫ");if (leg.track<0) leg.track=Track(prefix+L"足IK");
@@ -628,9 +640,14 @@ void BuildSources() {
         // VMD optional IK blocks may omit a toggle track; absence means the
         // solver remains enabled throughout the motion. Explicit OFF samples
         // are still honored when the track exists.
-        if (leg.track<0 || leg.thigh<0 || leg.calf<0 || leg.foot<0) {leg.track=-1;continue;}
-        if (playback.bones[leg.calf].identity.parent!=leg.thigh || playback.bones[leg.foot].identity.parent!=leg.calf) {leg.track=-1;continue;}
-        if (!playback.bones[leg.thigh].hasReference||!playback.bones[leg.calf].hasReference||!playback.bones[leg.foot].hasReference) leg.track=-1;
+        // Keep the VMD target track observable even when this avatar does not
+        // expose the expected three-bone chain. The writer gate below still
+        // requires every identity/reference check to pass.
+        leg.chainReady=leg.thigh>=0&&leg.calf>=0&&leg.foot>=0&&
+            playback.bones[leg.calf].identity.parent==leg.thigh&&
+            playback.bones[leg.foot].identity.parent==leg.calf&&
+            playback.bones[leg.thigh].hasReference&&playback.bones[leg.calf].hasReference&&
+            playback.bones[leg.foot].hasReference;
     }
     for (unsigned i=0;i<playback.boneCount;++i) {
         const auto& bone=playback.bones[i];
@@ -839,35 +856,52 @@ bool IKSet(int index,Quaternion world) {
     ++playback.ikWrites;return true;
 }
 bool PrepareIK() {
-    if (!FootIKWritePathEnabled()) return true;
-    Vector3 root{};Quaternion rotation{};
-    if (!Position(playback.root,root)||!WorldRotation(playback.root,rotation)) return false;
+    const bool writer=FootIKWritePathEnabled();
     for (auto& leg:playback.legs) if (leg.track>=0) {
+        leg.targetReady=false;leg.poleReady=false;leg.groundReady=false;leg.groundClamped=false;
+        const auto sampleTarget=[&](double frame,Vector3& out,bool& groundClamped) {
+            const auto target=vmd::SamplePosition(clip.tracks[size_t(leg.track)],frame);
+            const auto parent=leg.parentTrack>=0?vmd::SamplePosition(clip.tracks[size_t(leg.parentTrack)],frame):Vector3{};
+            if (!ik::ModelTarget(target,parent,out)) return false;
+            Vector3 ground{};bool clamped=false;
+            // No terrain getter is verified yet. A zero model plane is only a
+            // deterministic calibration candidate and is never written.
+            if (!ik::GroundCandidate(out,0.0f,0.0f,ground,clamped)) return false;
+            groundClamped=clamped;return true;
+        };
+        bool clamp0=false,clamp30=false,clamp120=false;
+        leg.targetReady=sampleTarget(0,leg.targetFrame0,clamp0)&&
+            sampleTarget(30,leg.targetFrame30,clamp30)&&sampleTarget(120,leg.targetFrame120,clamp120);
+        leg.groundReady=leg.targetReady;
+        leg.groundClamped=clamp0||clamp30||clamp120;
+        if (!leg.targetReady) {if(writer)return false;continue;}
+        if (!leg.chainReady) {if(writer)return false;continue;}
+        Vector3 root{};Quaternion rotation{};
+        if (!Position(playback.root,root)||!WorldRotation(playback.root,rotation)) {if(writer)return false;continue;}
         Vector3 hip{},knee{},foot{};Quaternion footRotation{};
         for (int index : {leg.thigh,leg.calf,leg.foot}) {
             Vector3 local{};const auto& bone=playback.bones[index];
-            if (!ReadBonePosition(bone.identity.object,bone.identity.native,local,false)) return false;
+            if (!ReadBonePosition(bone.identity.object,bone.identity.native,local,false)) {if(writer)return false;continue;}
         }
-        if (!Position(leg.thigh,hip)||!Position(leg.calf,knee)||!Position(leg.foot,foot)||!WorldRotation(leg.foot,footRotation)) return false;
+        if (!Position(leg.thigh,hip)||!Position(leg.calf,knee)||!Position(leg.foot,foot)||!WorldRotation(leg.foot,footRotation)) {if(writer)return false;continue;}
         leg.upper=ik::Length(ik::Sub(knee,hip));leg.lower=ik::Length(ik::Sub(foot,knee));
-        if (!std::isfinite(leg.upper)||!std::isfinite(leg.lower)||leg.upper<0.0001f||leg.lower<0.0001f||leg.upper>100||leg.lower>100) return false;
+        if (!std::isfinite(leg.upper)||!std::isfinite(leg.lower)||leg.upper<0.0001f||leg.lower<0.0001f||leg.upper>100||leg.lower>100) {if(writer)return false;continue;}
         const auto& restHip=playback.bones[leg.thigh].rest.position;
         const auto& restKnee=playback.bones[leg.calf].rest.position;
         const auto& restFoot=playback.bones[leg.foot].rest.position;
         const auto restUpper=ik::Length(ik::Sub(restKnee,restHip)),restLower=ik::Length(ik::Sub(restFoot,restKnee));
-        if (restUpper<0.0001f||restLower<0.0001f) return false;
+        if (restUpper<0.0001f||restLower<0.0001f) {if(writer)return false;continue;}
         const auto scale=leg.upper/restUpper;
-        if (std::fabs(leg.lower/restLower-scale)>scale*0.01f) return false;
+        if (std::fabs(leg.lower/restLower-scale)>scale*0.01f) {if(writer)return false;continue;}
         // A collinear bind chain has no verified pole.  Do not invent one:
         // the writer remains disabled until a game/native IK path supplies a
         // valid bend plane.
-        if (!ik::PoleDirection(restHip,restKnee,restFoot,leg.pole)) return false;
+        leg.poleReady=ik::PoleDirection(restHip,restKnee,restFoot,leg.pole);
+        if (!leg.poleReady) {if(writer)return false;continue;}
         // VMD IK positions are model-space targets, not offsets from the
         // game's bind foot. Retarget motion relative to frame 0 so the
         // opening frame cannot double-apply its absolute target.
-        const auto target=vmd::SamplePosition(clip.tracks[leg.track],0);
-        const auto parent=leg.parentTrack>=0?vmd::SamplePosition(clip.tracks[leg.parentTrack],0):Vector3{};
-        if (!ik::ModelTarget(target,parent,leg.initialTarget)) return false;
+        leg.initialTarget=leg.targetFrame0;
         leg.anchor=restFoot;
         leg.firstFoot=playback.bones[leg.foot].rest.rotation;
         leg.ticks=0;leg.clamped=0;leg.maxResidual=0;
@@ -881,6 +915,7 @@ bool SolveIK(double frame,float blend) {
     for (unsigned side=0;side<2;++side) {
         auto& leg=playback.legs[side];
         if (leg.track<0) continue;
+        if (!leg.chainReady||!leg.targetReady||!leg.poleReady) return false;
         if (leg.toggleTrack>=0 && !vmd::SampleIkEnabled(clip,clip.ikTracks[size_t(leg.toggleTrack)].name,frame)) continue;
         ++leg.enabledTicks;
         Vector3 delta{};
@@ -1495,12 +1530,16 @@ bool LoadMotionClip(const std::filesystem::path& path,std::ostream& report,HANDL
             const auto raw=targetTrack>=0?vmd::SamplePosition(loaded.tracks[size_t(targetTrack)],requestedFrame):Vector3{};
             const auto parentRaw=parentTrack>=0?vmd::SamplePosition(loaded.tracks[size_t(parentTrack)],requestedFrame):Vector3{};
             const auto model=ik::ModelPosition(raw),parentModel=ik::ModelPosition(parentRaw);
-            const auto combined=ik::Add(model,parentModel);
+            Vector3 combined{},ground{};bool combinedValid=false,groundValid=false,clamped=false;
+            if (targetTrack>=0) combinedValid=ik::ModelTarget(raw,parentRaw,combined);
+            if (combinedValid) groundValid=ik::GroundCandidate(combined,0.0f,0.0f,ground,clamped);
             report << "  sample_frame=" << requestedFrame << " raw=" << raw.x << ',' << raw.y << ',' << raw.z
                 << " model=" << model.x << ',' << model.y << ',' << model.z
                 << " parent_raw=" << parentRaw.x << ',' << parentRaw.y << ',' << parentRaw.z
                 << " parent_model=" << parentModel.x << ',' << parentModel.y << ',' << parentModel.z
-                << " combined_model=" << combined.x << ',' << combined.y << ',' << combined.z << '\n';
+                << " combined_model=" << combined.x << ',' << combined.y << ',' << combined.z
+                << " target_valid=" << combinedValid << " ground_candidate=" << groundValid
+                << " ground_clamped=" << clamped << " ground_plane=DIAGNOSTIC_Y0_NOT_GAME_TERRAIN\n";
         }
     };
     reportFootTarget("L",L"左足ＩＫ",L"左足IK",L"左足ＩＫ親",L"左足IK親");
@@ -1737,12 +1776,18 @@ void ReportMotion(std::ostream& report) {
     report << "[FOOT_IK_GATE] analytic_solver=DISABLED compile_time=0 runtime_flag=" << footIK
         << " writes=" << playback.ikWrites << " target_space=VMD_MODEL_TO_MODEL_Y_180"
         << " reason=WAIT_FOR_VERIFIED_GAME_NATIVE_IK_PATH\n";
-    if (FootIKWritePathEnabled()) for (unsigned side=0;side<2;++side) {
+    for (unsigned side=0;side<2;++side) if (footIK||playback.legs[side].track>=0) {
         const auto& leg=playback.legs[side];
         report << "[FOOT_IK] side=" << side << " track=" << leg.track << " upper=" << leg.upper << " lower=" << leg.lower << " ticks=" << leg.ticks
             << " clamped=" << leg.clamped << " enabled_ticks=" << leg.enabledTicks << " toggle_track=" << leg.toggleTrack << " max_residual=" << leg.maxResidual << " units=" << ikUnits << " IK_quaternion_writes=" << playback.ikWrites
             << " failure_step=" << leg.failureStep << " last_upper=" << leg.lastUpper << " last_lower=" << leg.lastLower << " last_residual=" << leg.lastResidual
-            << " target_mode=STATIC_BIND_PLUS_VMD_FRAME0_DELTA\n";
+            << " chain_ready=" << leg.chainReady << " target_ready=" << leg.targetReady << " pole_ready=" << leg.poleReady
+            << " ground_candidate_ready=" << leg.groundReady << " ground_clamped=" << leg.groundClamped
+            << " target_f0=" << leg.targetFrame0.x << ',' << leg.targetFrame0.y << ',' << leg.targetFrame0.z
+            << " target_f30=" << leg.targetFrame30.x << ',' << leg.targetFrame30.y << ',' << leg.targetFrame30.z
+            << " target_f120=" << leg.targetFrame120.x << ',' << leg.targetFrame120.y << ',' << leg.targetFrame120.z
+            << " target_mode=STATIC_BIND_PLUS_VMD_FRAME0_DELTA"
+            << " ground_plane=DIAGNOSTIC_Y0_NOT_GAME_TERRAIN writer=" << (FootIKWritePathEnabled()?"BLOCKED_UNTIL_NATIVE_IK":"BLOCKED") << '\n';
     }
     for (unsigned i=0;i<playback.sampleCount;++i) {
         const auto& sample=playback.samples[i];
@@ -1750,5 +1795,8 @@ void ReportMotion(std::ostream& report) {
         Q(report,sample.left); report << " right="; Q(report,sample.right); report << " head="; Q(report,sample.head); report << '\n';
     }
     report.flush();
+}
+void ConfigureFootIKDiagnostics(float units) {
+    ConfigureFootIKDiagnosticsImpl(units);
 }
 }

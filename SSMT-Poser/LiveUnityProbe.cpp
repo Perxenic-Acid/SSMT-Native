@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <ostream>
@@ -1293,11 +1294,14 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
         if (!InitializeBoneGeometry(runtime,report)) {report << "blocker=reference pose requires verified world rotation getters\n";return false;}
     }
     const auto ikScalePath=directory/L"foot_ik_scale.txt";
+    float requestedIkUnits=0.0f;
     if (GetFileAttributesW(ikScalePath.c_str())!=INVALID_FILE_ATTRIBUTES) {
-        float units=0;std::ifstream scaleFile(ikScalePath);scaleFile>>units;
-        report << "foot_IK=DISABLED_UNVERIFIED_ANALYTIC_SOLVER; requested_units=" << units
-            << "; reason=WAIT_FOR_GAME_NATIVE_IK_PATH\n";
+        std::ifstream scaleFile(ikScalePath);scaleFile>>requestedIkUnits;
     }
+    ConfigureFootIKDiagnostics(requestedIkUnits);
+    report << "foot_IK=DIAGNOSTICS_ONLY; requested_units=" << requestedIkUnits
+        << " valid_scale=" << (std::isfinite(requestedIkUnits)&&requestedIkUnits>0.0f&&requestedIkUnits<=100.0f)
+        << "; writes=BLOCKED; reason=WAIT_FOR_GAME_NATIVE_IK_PATH\n";
     job.fbikProbeEnabled = GetFileAttributesW((directory/L"fbik_probe.flag").c_str()) != INVALID_FILE_ATTRIBUTES;
     report << "fbik_probe=" << (job.fbikProbeEnabled ? "ARMED_READONLY_COUNTS" : "DISABLED_METADATA_ONLY") << '\n';
     if (GetFileAttributesW((directory/L"arm_test.flag").c_str())!=INVALID_FILE_ATTRIBUTES) {
