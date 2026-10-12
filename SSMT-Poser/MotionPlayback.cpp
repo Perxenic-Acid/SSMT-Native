@@ -993,7 +993,7 @@ bool Stop() {
             bone.restoreReadback=after;bone.restoreChecked=restored;
             if (restored) ++playback.restoredBones;
         }
-        if (playback.rootPositionTouched && ownerIdentityValid && playback.ownerActiveAtStop) {
+        if (playback.rootPositionTouched && ownerIdentityValid) {
             // Root translation has an independent setter and must be handed back
             // even when a rotation restore failed; otherwise a partial stop can
             // leave the actor displaced by the VMD track.
@@ -1007,8 +1007,7 @@ bool Stop() {
             if (rootRestored) playback.rootWrittenPosition=after;
             restored=restored && rootRestored;
         }
-        if ((playback.actorRootWorldTouched || playback.actorRootWorldRotationTouched) &&
-            ownerIdentityValid && playback.ownerActiveAtStop) {
+        if ((playback.actorRootWorldTouched || playback.actorRootWorldRotationTouched) && ownerIdentityValid) {
             auto& actorRoot=playback.bones[playback.root];
             Vector3 worldAfter{};
             Quaternion worldRotationAfter{};
