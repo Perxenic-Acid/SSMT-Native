@@ -12,3 +12,7 @@ build/
 /Plugins/
 native.zip
 SSMT-PluginHost.log
+
+# Local Poser investigation reports and test harnesses
+/SSMT-Poser/Reports/
+/SSMT-Poser/Tests/
