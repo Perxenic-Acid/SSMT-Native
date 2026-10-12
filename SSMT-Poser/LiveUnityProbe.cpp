@@ -98,6 +98,55 @@ struct ComponentClassCount {
     uintptr_t klass = 0;
     uint32_t count = 0;
 };
+// Secondary-motion discovery is deliberately read-only.  The game owns these
+// components and their simulation state; the probe only classifies the type
+// and the nearby bone names so passthrough coverage can be checked per actor.
+enum class SecondaryKind : uint8_t {
+    None,
+    DynamicBone,
+    Verlet,
+    SpringBone,
+    Cloth,
+    TransformChange,
+    Rigidbody,
+    Collider,
+};
+constexpr size_t SecondaryKindCount = static_cast<size_t>(SecondaryKind::Collider) + 1;
+const char* SecondaryKindName(SecondaryKind kind) {
+    switch (kind) {
+    case SecondaryKind::DynamicBone: return "DYNAMIC_BONE";
+    case SecondaryKind::Verlet: return "VERLET";
+    case SecondaryKind::SpringBone: return "SPRING_BONE";
+    case SecondaryKind::Cloth: return "CLOTH";
+    case SecondaryKind::TransformChange: return "TRANSFORM_CHANGE";
+    case SecondaryKind::Rigidbody: return "RIGIDBODY";
+    case SecondaryKind::Collider: return "COLLIDER";
+    default: return "NONE";
+    }
+}
+SecondaryKind ClassifySecondaryType(std::string_view name) {
+    if (name.find("DynamicBone") != std::string_view::npos) return SecondaryKind::DynamicBone;
+    if (name.find("Verlet") != std::string_view::npos) return SecondaryKind::Verlet;
+    if (name.find("SpringBone") != std::string_view::npos || name.find("Spring") != std::string_view::npos)
+        return SecondaryKind::SpringBone;
+    if (name.find("Cloth") != std::string_view::npos) return SecondaryKind::Cloth;
+    if (name.find("TransformChange") != std::string_view::npos ||
+        name.find("FlyAttachment") != std::string_view::npos)
+        return SecondaryKind::TransformChange;
+    if (name.find("Rigidbody") != std::string_view::npos) return SecondaryKind::Rigidbody;
+    if (name.find("Collider") != std::string_view::npos) return SecondaryKind::Collider;
+    return SecondaryKind::None;
+}
+SecondaryKind ClassifySecondaryBone(std::string_view name) {
+    // Bone names are only evidence for chain discovery, never a write target.
+    if (name.find("Hair") != std::string_view::npos || name.find("Pony") != std::string_view::npos ||
+        name.find("Tail") != std::string_view::npos || name.find("Ribbon") != std::string_view::npos)
+        return SecondaryKind::DynamicBone;
+    if (name.find("Skirt") != std::string_view::npos || name.find("Dress") != std::string_view::npos ||
+        name.find("Cloth") != std::string_view::npos || name.find("Coat") != std::string_view::npos)
+        return SecondaryKind::Cloth;
+    return SecondaryKind::None;
+}
 std::string Utf8(const wchar_t* text, int length);
 bool ReadName(uintptr_t object, wchar_t (&name)[128], int& length);
 bool Alive(uintptr_t object, uintptr_t expected, uintptr_t& native);
@@ -1420,17 +1469,26 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
                     << " unique_runtime_types=" << job.componentSubtreeTypeCount
                     << " truncated=" << job.componentSubtreeTruncated
                     << " scope=ANIMATOR_GAMEOBJECT_AND_DESCENDANTS include_inactive=1\n";
+                std::array<uint64_t, SecondaryKindCount> secondaryTypeCounts{};
+                std::array<uint64_t, SecondaryKindCount> secondaryComponentCounts{};
                 if (job.componentSubtreeFresh) {
                     for (unsigned i = 0; i < job.componentSubtreeTypeCount; ++i) {
                         const auto& type = job.componentSubtreeTypes[i];
                         NativeClass described;
+                        SecondaryKind secondaryKind = SecondaryKind::None;
                         report << "[GROUND_IK_COMPONENT_TYPE] count=" << type.count << " class=0x"
                             << std::hex << type.klass << std::dec;
                         if (runtime.DescribeClass(type.klass, described)) {
-                            report << " metadata_id=" << described.metadataId << " name="
-                                << (described.namespaze.empty() ? described.name : described.namespaze + "." + described.name);
                             const auto fullName = described.namespaze.empty()
                                 ? described.name : described.namespaze + "." + described.name;
+                            secondaryKind = ClassifySecondaryType(fullName);
+                            if (secondaryKind != SecondaryKind::None) {
+                                const auto index = static_cast<size_t>(secondaryKind);
+                                ++secondaryTypeCounts[index];
+                                secondaryComponentCounts[index] += type.count;
+                            }
+                            report << " metadata_id=" << described.metadataId << " name=" << fullName
+                                << " secondary_kind=" << SecondaryKindName(secondaryKind);
                             const bool relevant = fullName.find("IK") != std::string::npos ||
                                 fullName.find("Foot") != std::string::npos ||
                                 fullName.find("Ground") != std::string::npos ||
@@ -1441,11 +1499,46 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
                             if (relevant)
                                 ReportMethodCensus(runtime, described.namespaze.c_str(), described.name.c_str(), report);
                         } else {
-                            report << " metadata_id=UNRESOLVED name=UNRESOLVED";
+                            report << " metadata_id=UNRESOLVED name=UNRESOLVED secondary_kind=NONE";
                         }
                         report << '\n';
                     }
                 }
+                report << "[SECONDARY_MOTION_SUMMARY] read=" << job.componentSubtreeFresh
+                    << " scope=ANIMATOR_GAMEOBJECT_AND_DESCENDANTS"
+                    << " classification=RUNTIME_TYPE_NAME_AND_BONE_NAME"
+                    << " simulation=GAME_OWNED_READ_ONLY"
+                    << " passthrough=UNTOUCHED_NATIVE"
+                    << " write_calls=NONE";
+                for (size_t i = 1; i < SecondaryKindCount; ++i) {
+                    const auto kind = static_cast<SecondaryKind>(i);
+                    report << ' ' << SecondaryKindName(kind) << "_types=" << secondaryTypeCounts[i]
+                        << ' ' << SecondaryKindName(kind) << "_components=" << secondaryComponentCounts[i];
+                }
+                report << '\n';
+                std::array<unsigned, SecondaryKindCount> secondaryBoneCounts{};
+                std::array<std::string, SecondaryKindCount> secondaryBoneSamples{};
+                const auto& renderer = job.items[1];
+                if (renderer.bonesValid) {
+                    for (unsigned i = 0; i < renderer.bonesLength && i < renderer.bones.size(); ++i) {
+                        const auto& bone = renderer.bones[i];
+                        const auto boneName = Utf8(bone.name, std::clamp(bone.nameLength, 0, 127));
+                        const auto kind = ClassifySecondaryBone(boneName);
+                        if (kind == SecondaryKind::None) continue;
+                        const auto index = static_cast<size_t>(kind);
+                        ++secondaryBoneCounts[index];
+                        if (secondaryBoneSamples[index].empty()) secondaryBoneSamples[index] = boneName;
+                    }
+                }
+                report << "[SECONDARY_BONE_CHAINS] read=" << renderer.bonesValid
+                    << " source=SKINNED_MESH_BONES classification=NAME_ONLY passthrough=UNTOUCHED_NATIVE";
+                for (size_t i = 1; i < SecondaryKindCount; ++i) {
+                    const auto kind = static_cast<SecondaryKind>(i);
+                    if (!secondaryBoneCounts[i]) continue;
+                    report << ' ' << SecondaryKindName(kind) << "_bones=" << secondaryBoneCounts[i]
+                        << "_sample=" << secondaryBoneSamples[i];
+                }
+                report << '\n';
                 for (const auto& candidate : job.groundCandidates) {
                     const bool runtimeComponent = std::string_view(candidate.name) == "MonoAnimationIKEventHelper" ||
                         std::string_view(candidate.name) == "DynamicBoneArray";
