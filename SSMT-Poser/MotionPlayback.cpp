@@ -70,6 +70,8 @@ struct Leg {
     bool groundClamped=false;
     Vector3 targetFrame0{},targetFrame30{},targetFrame120{};
     Vector3 groundFrame0{},groundFrame30{},groundFrame120{};
+    bool toggleFrame0=true,toggleFrame30=true,toggleFrame120=true,lastToggleState=true;
+    unsigned toggleSamples=0,toggleEnabledSamples=0,toggleDisabledSamples=0;
 };
 struct Sample { DWORD thread; uint64_t tick; double frame; unsigned matched; Quaternion left,right,head; };
 struct ABSnapshot {
@@ -190,6 +192,10 @@ std::atomic<float> progressSeconds{0};
 basis::Settings abSettings;
 bool FootIKWritePathEnabled() {
     return AnalyticFootIkEnabled&&footIK&&!abSettings.enabled;
+}
+bool IkToggle(const Leg& leg,double frame) {
+    return leg.toggleTrack<0 ||
+        vmd::SampleIkEnabled(clip,clip.ikTracks[size_t(leg.toggleTrack)].name,frame);
 }
 void ConfigureFootIKDiagnosticsImpl(float units) {
     if (std::isfinite(units)&&units>0.0f&&units<=100.0f) {
@@ -874,6 +880,14 @@ bool PrepareIK() {
             sampleTarget(30,leg.targetFrame30,clamp30)&&sampleTarget(120,leg.targetFrame120,clamp120);
         leg.groundReady=leg.targetReady;
         leg.groundClamped=clamp0||clamp30||clamp120;
+        // The VMD IK block is a separate state track. Capture its reference
+        // states up front so the playback report can prove that OFF intervals
+        // are honored even while the transform writer remains gated.
+        leg.toggleFrame0=IkToggle(leg,0);
+        leg.toggleFrame30=IkToggle(leg,30);
+        leg.toggleFrame120=IkToggle(leg,120);
+        leg.lastToggleState=leg.toggleFrame0;
+        leg.toggleSamples=leg.toggleEnabledSamples=leg.toggleDisabledSamples=0;
         if (!leg.targetReady) {if(writer)return false;continue;}
         if (!leg.chainReady) {if(writer)return false;continue;}
         Vector3 root{};Quaternion rotation{};
@@ -916,7 +930,7 @@ bool SolveIK(double frame,float blend) {
         auto& leg=playback.legs[side];
         if (leg.track<0) continue;
         if (!leg.chainReady||!leg.targetReady||!leg.poleReady) return false;
-        if (leg.toggleTrack>=0 && !vmd::SampleIkEnabled(clip,clip.ikTracks[size_t(leg.toggleTrack)].name,frame)) continue;
+        if (!IkToggle(leg,frame)) continue;
         ++leg.enabledTicks;
         Vector3 delta{};
         const auto target=vmd::SamplePosition(clip.tracks[leg.track],frame);
@@ -1074,6 +1088,15 @@ void Tick() {
         if (!WriteRootMotion(clip.lastFrame)) { playback.fault=7; status=3; }
         else status=2;
         enabled=false; return;
+    }
+    // Consume VMD IK enable/disable blocks at the same sampled frame as the
+    // pose. This is observable state even with the native/game IK writer
+    // disabled, and prevents a future writer from applying stale targets.
+    for (auto& leg:playback.legs) if (leg.track>=0) {
+        leg.lastToggleState=IkToggle(leg,frame);
+        ++leg.toggleSamples;
+        if (leg.lastToggleState) ++leg.toggleEnabledSamples;
+        else ++leg.toggleDisabledSamples;
     }
     LARGE_INTEGER begin{},end{}; QueryPerformanceCounter(&begin);
     if(!settings.enabled||settings.route==basis::Route::Legacy)SourcePose(frame,settings);
@@ -1785,6 +1808,9 @@ void ReportMotion(std::ostream& report) {
             << " target_f0=" << leg.targetFrame0.x << ',' << leg.targetFrame0.y << ',' << leg.targetFrame0.z
             << " target_f30=" << leg.targetFrame30.x << ',' << leg.targetFrame30.y << ',' << leg.targetFrame30.z
             << " target_f120=" << leg.targetFrame120.x << ',' << leg.targetFrame120.y << ',' << leg.targetFrame120.z
+            << " toggle_f0=" << leg.toggleFrame0 << " toggle_f30=" << leg.toggleFrame30 << " toggle_f120=" << leg.toggleFrame120
+            << " toggle_samples=" << leg.toggleSamples << " toggle_enabled_samples=" << leg.toggleEnabledSamples
+            << " toggle_disabled_samples=" << leg.toggleDisabledSamples << " toggle_last=" << leg.lastToggleState
             << " target_mode=STATIC_BIND_PLUS_VMD_FRAME0_DELTA"
             << " ground_plane=DIAGNOSTIC_Y0_NOT_GAME_TERRAIN writer=" << (FootIKWritePathEnabled()?"BLOCKED_UNTIL_NATIVE_IK":"BLOCKED") << '\n';
     }
