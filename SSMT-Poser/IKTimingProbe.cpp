@@ -13,6 +13,10 @@ namespace {
 using OnAnimatorIK = void (*)(uintptr_t, int, uintptr_t);
 
 constexpr unsigned MaxSamples = 128;
+// Threaded IK callbacks can fill the general sample ring before the sparse
+// main-thread callback arrives. Keep an independent small capture so identity
+// evidence is never lost to callback ordering.
+constexpr unsigned MaxMainSamples = 16;
 constexpr unsigned MaxHooks = 4;
 
 struct Sample {
@@ -66,6 +70,7 @@ std::atomic<uint64_t> identityFaults{0};
 std::atomic<unsigned> sampleCount{0};
 std::atomic<unsigned> identityProbeCount{0};
 Sample samples[MaxSamples]{};
+Sample mainSamples[MaxMainSamples]{};
 
 using Getter = uintptr_t (*)(uintptr_t, uintptr_t);
 
@@ -136,23 +141,26 @@ void Record(unsigned index, uintptr_t instance, int layer) {
     const bool main = !unityThread || thread == unityThread;
     if (!main) offMain.fetch_add(1, std::memory_order_relaxed);
     const auto sampleIndex = sampleCount.fetch_add(1, std::memory_order_relaxed);
-    if (sampleIndex >= MaxSamples) return;
-    auto& sample = samples[sampleIndex];
-    sample = Sample{};
-    sample.thread = thread;
-    sample.tick = GetTickCount64();
-    sample.instance = instance;
-    Read(instance, sample.instanceClass);
-    sample.selectedAnimator = selectedAnimator;
-    sample.layer = layer;
-    sample.hook = static_cast<uint8_t>(index);
-    sample.mainThread = main;
+    Sample* sample = nullptr;
     if (main) {
-        const auto identityIndex = identityProbeCount.fetch_add(1, std::memory_order_relaxed);
-        if (identityIndex < 8) {
-            const auto fault = CaptureIdentity(index, instance, sample);
-            if (fault) identityFaults.fetch_add(1, std::memory_order_relaxed);
-        }
+        const auto mainIndex = identityProbeCount.fetch_add(1, std::memory_order_relaxed);
+        if (mainIndex < MaxMainSamples) sample = &mainSamples[mainIndex];
+    } else if (sampleIndex < MaxSamples) {
+        sample = &samples[sampleIndex];
+    }
+    if (!sample) return;
+    *sample = Sample{};
+    sample->thread = thread;
+    sample->tick = GetTickCount64();
+    sample->instance = instance;
+    Read(instance, sample->instanceClass);
+    sample->selectedAnimator = selectedAnimator;
+    sample->layer = layer;
+    sample->hook = static_cast<uint8_t>(index);
+    sample->mainThread = main;
+    if (main) {
+        const auto fault = CaptureIdentity(index, instance, *sample);
+        if (fault) identityFaults.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -200,6 +208,7 @@ void ResetCounters() {
     identityProbeCount = 0;
     for (auto& count : hookCalls) count = 0;
     for (auto& sample : samples) sample = {};
+    for (auto& sample : mainSamples) sample = {};
 }
 
 void ResetDescriptors() {
@@ -394,6 +403,20 @@ void ReportIKTimingProbe(std::ostream& report) {
             << " animator_go=0x" << sample.animatorGameObject << " animator_go_native=0x" << sample.animatorGameObjectNative
             << std::dec << " identity=" << IdentityName(sample.identityStatus)
             << " main_thread=" << (sample.mainThread ? 1 : 0) << '\n';
+    }
+    const auto mainLimit = identityProbeCount.load(std::memory_order_acquire) < MaxMainSamples
+        ? identityProbeCount.load(std::memory_order_acquire) : MaxMainSamples;
+    for (unsigned i = 0; i < mainLimit; ++i) {
+        const auto& sample = mainSamples[i];
+        report << "[IK_TIMING_MAIN_CALLBACK] index=" << i << " hook=" << unsigned(sample.hook)
+            << " tid=" << sample.thread << " tick=" << sample.tick << " layer=" << sample.layer
+            << " instance=0x" << std::hex << sample.instance << " instance_class=0x" << sample.instanceClass
+            << " instance_native=0x" << sample.instanceNative
+            << " selected_animator=0x" << sample.selectedAnimator
+            << " helper_go=0x" << sample.helperGameObject << " helper_go_native=0x" << sample.helperGameObjectNative
+            << " animator_go=0x" << sample.animatorGameObject << " animator_go_native=0x" << sample.animatorGameObjectNative
+            << std::dec << " identity=" << IdentityName(sample.identityStatus)
+            << " main_thread=1\n";
     }
 }
 
