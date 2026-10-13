@@ -173,10 +173,13 @@ struct Job {
     NativeMethod human, rootBone, bones, mesh;
     NativeMethod fbikEffectorCount, fbikChainCount, fbikCheckPass;
     NativeMethod animatorLayerCount, animatorLayerEnable;
+    NativeMethod animatorIkGetPosition;
     NativeMethod fbikChainElementCount;
     bool fbikMethodsReady = false;
     bool fbikChainElementMethodReady = false;
     bool animatorLayerMethodsReady = false;
+    bool animatorIkPositionMethodReady = false;
+    bool animatorIkPositionAbiReady = false;
     bool fbikProbeEnabled = false;
     bool fbikRead = false, fbikPass = false;
     unsigned fbikReadFailure = 0;
@@ -189,6 +192,10 @@ struct Job {
     std::array<int8_t, 8> animatorLayerEnabled{};
     unsigned animatorLayerReadCount = 0;
     DWORD animatorLayerReadFault = 0;
+    bool animatorIkPositionRead = false;
+    unsigned animatorIkPositionSampleCount = 0;
+    DWORD animatorIkPositionReadFault = 0;
+    std::array<Vector3, 4> animatorIkPositions{};
     DWORD mainThread = 0, actualThread = 0, fault = 0;
     uintptr_t runtimeThread = 0;
     unsigned step = 0;
@@ -283,6 +290,64 @@ bool ReadAnimatorIKLayers(uintptr_t animator) {
 DWORD ReadAnimatorIKLayersGuarded(uintptr_t animator, bool& read) {
     __try {
         read = ReadAnimatorIKLayers(animator);
+        return 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        read = false;
+        return GetExceptionCode();
+    }
+}
+
+// Animator.GetIKPosition returns a 12-byte Vector3 through the same hidden
+// sret wrapper used by the already validated Transform Vector3 getters.  The
+// goal argument is an int32 and the MethodInfo descriptor remains the final
+// argument on the x64 generated wrapper.  This probe is deliberately read
+// only; a failed call disables only the optional IK evidence path.
+using AnimatorIKPositionGetter = Vector3* (*)(Vector3*, uintptr_t, int, uintptr_t);
+
+bool ValidateAnimatorIKPositionWrapper(const NativeMethod& method, std::ostream& report) {
+    if (!method.entry || !method.target || !method.descriptor || method.parameterCount != 1) {
+        report << "[ANIMATOR_IK_POSITION_ABI] ready=0 reason=descriptor_or_parameter_count\n";
+        return false;
+    }
+    // The first instruction sequence is independent of the goal argument and
+    // proves that RCX is the caller-owned Vector3 return buffer.  Do not call
+    // a candidate that does not preserve this established Vector3 convention.
+    if (!Pattern(method.entry, 3, "48 89 CE")) {
+        report << "[ANIMATOR_IK_POSITION_ABI] ready=0 reason=vector3_sret_prefix\n";
+        return false;
+    }
+    report << "[ANIMATOR_IK_POSITION_ABI] ready=1 method=" << method.name
+        << " metadataId=" << method.metadataId << " parameterCount="
+        << unsigned(method.parameterCount) << " entry=0x" << std::hex
+        << method.entry << " target=0x" << method.target << " descriptor=0x"
+        << method.descriptor << std::dec
+        << " RCX=sret RDX=Animator R8=AvatarIKGoal R9=descriptor bytes=12"
+        << " invocation=READONLY_CANARY\n";
+    return true;
+}
+
+bool ReadAnimatorIKPositions(uintptr_t animator) {
+    if (!animator || !job.animatorIkPositionAbiReady) return false;
+    uintptr_t native = 0;
+    if (!Alive(animator, job.items[2].klass, native)) return false;
+    const auto getter = reinterpret_cast<AnimatorIKPositionGetter>(job.animatorIkGetPosition.entry);
+    constexpr uint32_t Canary = 0xD17A6C3B;
+    job.animatorIkPositionSampleCount = 0;
+    for (int goal = 0; goal < 4; ++goal) {
+        struct Buffer { uint32_t first; Vector3 value; uint32_t last; } buffer{Canary, {}, Canary};
+        const auto returned = getter(&buffer.value, animator, goal, job.animatorIkGetPosition.descriptor);
+        if (returned != &buffer.value || buffer.first != Canary || buffer.last != Canary ||
+            !std::isfinite(buffer.value.x) || !std::isfinite(buffer.value.y) ||
+            !std::isfinite(buffer.value.z)) return false;
+        job.animatorIkPositions[static_cast<size_t>(goal)] = buffer.value;
+        ++job.animatorIkPositionSampleCount;
+    }
+    return job.animatorIkPositionSampleCount == job.animatorIkPositions.size();
+}
+
+DWORD ReadAnimatorIKPositionsGuarded(uintptr_t animator, bool& read) {
+    __try {
+        read = ReadAnimatorIKPositions(animator);
         return 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         read = false;
@@ -706,6 +771,10 @@ bool ExecuteGuarded() {
         if (job.fbikProbeEnabled && job.animatorLayerMethodsReady && selectedAnimator) {
             job.animatorLayerReadFault = ReadAnimatorIKLayersGuarded(selectedAnimator, job.animatorLayerRead);
         }
+        if (job.animatorIkPositionAbiReady && selectedAnimator) {
+            job.animatorIkPositionReadFault = ReadAnimatorIKPositionsGuarded(
+                selectedAnimator, job.animatorIkPositionRead);
+        }
         job.step = 8;
         job.complete = true;
         return true;
@@ -822,7 +891,8 @@ bool RunMotionSession(GenshinNativeRuntime& runtime,HANDLE stop,HMODULE module,W
     if (passed) {
         // The game-owned callback is observed only after the existing MinHook
         // session is live; IK probe failure must not block motion playback.
-        ikTimingReady=InstallIKTimingProbe(runtime,job.mainThread,SelectedRigAnimator(),report);
+        ikTimingReady=InstallIKTimingProbe(runtime,job.mainThread,SelectedRigAnimator(),
+            job.items[2].klass,job.gameObjectClass,job.gameObject,job.gameObjectMethod,report);
     }
     if (passed) passed=ConfigureMotionAB(directory,report);
     report << "phase=" << (passed?"MOTION_COMMANDS_READY":"MOTION_REFERENCE_BLOCKED") << "; NUMPAD1=load_or_reload_and_play; NUMPAD2=stop_and_restore; NUMPAD3=finish_session; NumLock=ON; playback_control=MANUAL\n";
@@ -1247,10 +1317,15 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
     job.animatorLayerMethodsReady =
         Method(runtime, "Animator", "get_layerCount", 0, job.animatorLayerCount) &&
         Method(runtime, "Animator", "GetLayerEnableOnAnimatorIK", 1, job.animatorLayerEnable);
+    job.animatorIkPositionMethodReady =
+        Method(runtime, "Animator", "GetIKPosition", 1, job.animatorIkGetPosition);
+    if (job.animatorIkPositionMethodReady)
+        job.animatorIkPositionAbiReady = ValidateAnimatorIKPositionWrapper(job.animatorIkGetPosition, report);
     report << "[FBIK_METHODS] available=" << job.fbikMethodsReady
         << " chain_element_count=" << job.fbikChainElementMethodReady
         << " position_rotation_calls=DEFERRED_ABI_VALIDATION"
-        << " animator_ik_layers=" << job.animatorLayerMethodsReady << '\n';
+        << " animator_ik_layers=" << job.animatorLayerMethodsReady
+        << " animator_ik_position=" << job.animatorIkPositionAbiReady << '\n';
     if (job.fbikMethodsReady) {
         for (const auto& method : {job.fbikEffectorCount, job.fbikChainCount, job.fbikCheckPass}) {
             report << "[FBIK_METHOD] " << method.name << " metadataId=" << method.metadataId
@@ -1271,6 +1346,14 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
                 << " parameterCount=" << unsigned(method.parameterCount) << '\n';
             Address(report, "entry", method.entry); Address(report, "target", method.target); Address(report, "descriptor", method.descriptor);
         }
+    }
+    if (job.animatorIkPositionMethodReady) {
+        const auto& method = job.animatorIkGetPosition;
+        report << "[ANIMATOR_IK_METHOD] " << method.name << " metadataId=" << method.metadataId
+            << " parameterCount=" << unsigned(method.parameterCount)
+            << " abi_ready=" << job.animatorIkPositionAbiReady << '\n';
+        Address(report, "entry", method.entry); Address(report, "target", method.target);
+        Address(report, "descriptor", method.descriptor);
     }
     for (const auto& method : {job.human, job.rootBone, job.bones, job.mesh}) {
         report << "[SCENE_GETTER] " << method.name << " metadataId=" << method.metadataId << '\n';
@@ -1382,6 +1465,8 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
         job.fbikReadFailure = 0; job.fbikReadFault = 0; job.fbikElementRead = 0;
         job.animatorLayerRead = false; job.animatorLayerCountValue = -1;
         job.animatorLayerEnabled.fill(-1); job.animatorLayerReadCount = 0; job.animatorLayerReadFault = 0;
+        job.animatorIkPositionRead = false; job.animatorIkPositionSampleCount = 0;
+        job.animatorIkPositionReadFault = 0; job.animatorIkPositions.fill({});
         if (WaitForSingleObject(stop, 0) == WAIT_OBJECT_0) return false;
         if (Read(job.context.mainThreadSlot, job.mainThread) && job.mainThread) {
             Window window{job.mainThread, nullptr};
@@ -1467,6 +1552,18 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
                             report << int(job.animatorLayerEnabled[layer]);
                         }
                         report << " max_sampled=8 call_mode=READONLY_MAIN_THREAD\n";
+                    }
+                    if (i == 2 && job.animatorIkPositionMethodReady) {
+                        report << "[ANIMATOR_IK_POSITION_READ] read=" << job.animatorIkPositionRead
+                            << " sampled=" << job.animatorIkPositionSampleCount
+                            << " fault=0x" << std::hex << job.animatorIkPositionReadFault << std::dec
+                            << " goals=";
+                        for (unsigned goal = 0; goal < job.animatorIkPositionSampleCount; ++goal) {
+                            if (goal) report << ';';
+                            const auto& value = job.animatorIkPositions[goal];
+                            report << goal << "=(" << value.x << ',' << value.y << ',' << value.z << ')';
+                        }
+                        report << " call_mode=READONLY_MAIN_THREAD\n";
                     }
                 }
                 report << "[GROUND_IK_HIERARCHY_SCAN] read=" << job.componentScanRead
