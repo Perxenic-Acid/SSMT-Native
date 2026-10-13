@@ -41,6 +41,12 @@ bool Pattern(uintptr_t address, size_t size, const char* signature) {
     if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(address), bytes.data(), size, &count) || count != size) return false;
     return native_detail::FindPattern(bytes, signature).size() == 1;
 }
+bool HasPattern(uintptr_t address, size_t size, const char* signature) {
+    std::vector<uint8_t> bytes(size);
+    SIZE_T count = 0;
+    if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(address), bytes.data(), size, &count) || count != size) return false;
+    return !native_detail::FindPattern(bytes, signature).empty();
+}
 bool Method(GenshinNativeRuntime& runtime, const char* owner, const char* name,
     uint8_t parameters, NativeMethod& result);
 std::string CodeBytes(uintptr_t address, size_t size = 64) {
@@ -68,6 +74,46 @@ const char* Vector3AbiHint(const NativeMethod& method) {
     if (Pattern(method.entry, 4, "48 83 EC 28")) return "STACK_WRAPPER_PREFIX";
     return "PREFIX_UNCLASSIFIED";
 }
+const char* AnimatorIKSetterAbiHint(const NativeMethod& method) {
+    if (!method.entry || method.parameterCount != 2) return "UNRESOLVED_OR_PARAMETER_COUNT";
+
+    // These are deliberately conservative data-flow observations, not an ABI
+    // proof. The current Unity wrapper copies RCX (Animator) to RDI and RDX
+    // (AvatarIKGoal) to ESI. SetIKPositionNoThreadCheck additionally copies
+    // R8 (the hidden Vector3 pointer argument) to a callee-saved register.
+    // A future writer must still perform a same-value getter/setter canary on
+    // the main Animator IK callback before invoking either setter.
+    const bool thisMove = HasPattern(method.entry, 96, "48 89 CF");
+    const bool goalMove = HasPattern(method.entry, 96, "89 D6");
+    const bool vectorMove = HasPattern(method.entry, 96, "4C 89 C3");
+    const bool scalarFloatOp =
+        HasPattern(method.entry, 96, "F3 0F 10") ||
+        HasPattern(method.entry, 96, "F3 0F 11") ||
+        HasPattern(method.entry, 96, "F3 0F 59") ||
+        HasPattern(method.entry, 96, "F3 0F 5E");
+    const bool position = method.name.find("SetIKPosition") != std::string::npos &&
+        method.name.find("Weight") == std::string::npos;
+    const bool weight = method.name.find("SetIKPositionWeight") != std::string::npos;
+    if (position && thisMove && goalMove && vectorMove) return "POSITION_RCX_RDX_R8_POINTER_OBSERVED";
+    if (weight && thisMove && goalMove && scalarFloatOp) return "WEIGHT_RCX_RDX_XMM_SCALAR_OBSERVED";
+    if (weight && thisMove && goalMove) return "WEIGHT_RCX_RDX_OBSERVED_XMM_UNCLASSIFIED";
+    if (thisMove && goalMove) return "RCX_RDX_FORWARDING_OBSERVED_ARGUMENT_CHANNEL_UNCLASSIFIED";
+    return "ENTRY_DATAFLOW_UNCLASSIFIED";
+}
+const char* AnimatorIKSetterCanary(const NativeMethod& method) {
+    const bool position = method.name.find("SetIKPosition") != std::string::npos &&
+        method.name.find("Weight") == std::string::npos;
+    const bool weight = method.name.find("SetIKPositionWeight") != std::string::npos;
+    if (position) {
+        return "MAIN_THREAD_ONLY;GET_POSITION(goal)->SET_SAME_POSITION(goal,Vector3*)->GET_POSITION(goal);"
+               "require_exact_readback_and_guard_canary;disable_on_fault_or_identity_change";
+    }
+    if (weight) {
+        return "MAIN_THREAD_ONLY;GET_POSITION_WEIGHT(goal)->SET_SAME_WEIGHT(goal,float)->GET_POSITION_WEIGHT(goal);"
+               "weight_getter_ABI_must_be_validated_first;disable_on_fault_or_identity_change";
+    }
+    return "NONE";
+}
 void ReportAnimatorIKVariant(GenshinNativeRuntime& runtime, const char* name,
     uint8_t parameters, std::ostream& report) {
     NativeMethod method;
@@ -79,6 +125,8 @@ void ReportAnimatorIKVariant(GenshinNativeRuntime& runtime, const char* name,
         report << " id=" << method.metadataId << " entry=0x" << std::hex << method.entry
             << " target=0x" << method.target << " descriptor=0x" << method.descriptor
             << std::dec << " entry_hint=" << Vector3AbiHint(method)
+            << " setter_hint=" << AnimatorIKSetterAbiHint(method)
+            << " setter_canary=\"" << AnimatorIKSetterCanary(method) << "\""
             << " entry_bytes=\"" << CodeBytes(method.entry)
             << "\" target_bytes=\"" << CodeBytes(method.target) << "\"";
     }
@@ -95,6 +143,8 @@ void ReportAnimatorIKVariants(GenshinNativeRuntime& runtime, std::ostream& repor
         {"SetIKPosition", 2}, {"SetIKPositionInternal", 2},
         {"INTERNAL_CALL_SetIKPositionInternal", 3},
         {"SetIKPositionNoThreadCheck", 2},
+        {"SetIKPositionWeight", 2}, {"SetIKPositionWeightInternal", 2},
+        {"SetIKPositionWeightNoThreadCheck", 2},
         {"GetIKRotation", 1}, {"GetIKRotationInternal", 1},
         {"INTERNAL_CALL_GetIKRotationInternal", 3},
         {"GetIKRotationNoThreadCheck", 1},
