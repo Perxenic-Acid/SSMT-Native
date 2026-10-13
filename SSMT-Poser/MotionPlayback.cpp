@@ -69,7 +69,7 @@ struct Leg {
     float soleOffset=0,groundY0=0;
     Quaternion firstFoot{0,0,0,1};
     float upper=0,lower=0,maxResidual=0,lastUpper=0,lastLower=0,lastResidual=0;
-    unsigned ticks=0,enabledTicks=0,clamped=0,failureStep=0;
+    unsigned ticks=0,enabledTicks=0,clamped=0,failureStep=0,rejectedTicks=0;
     unsigned groundQueries=0;
     // These fields describe the safe target pipeline even while the actual
     // writer is gated. They are POD state copied into the session report.
@@ -953,9 +953,14 @@ bool PrepareIK() {
         if (restUpper<0.0001f||restLower<0.0001f) {if(writer)return false;continue;}
         const auto scale=leg.upper/restUpper;
         if (std::fabs(leg.lower/restLower-scale)>scale*0.01f) {if(writer)return false;continue;}
-        // Bind positions are model-space. Derive the pole from the live world
-        // chain so the solver never mixes those coordinates with world poses.
-        leg.poleReady=ik::PoleDirection(hip,knee,foot,leg.pole);
+        // The live chain can already be bent by the native animator or by a
+        // previous solver pass.  Using it as the pole would therefore permit
+        // the bend side to flip (the visible symptom is a knee projecting
+        // backwards).  The Avatar bind pose is the stable model-space
+        // reference; rotate that reference into the captured actor world.
+        Vector3 modelPole{};
+        leg.poleReady=ik::PoleDirection(restHip,restKnee,restFoot,modelPole);
+        if (leg.poleReady) leg.pole=ik::Unit(ik::Rotate(playback.actorRootWorldRestoreRotation,modelPole));
         if (!leg.poleReady) {if(writer)return false;continue;}
         // VMD IK positions are model-space targets, not offsets from the
         // game's bind foot. Retarget motion relative to frame 0 so the
@@ -1047,7 +1052,14 @@ bool SolveIK(double frame,float blend) {
         if (!IKSet(leg.calf,vmd::Multiply(ik::FromTo(ik::Sub(foot,knee),ik::Sub(solution.ankle,knee)),calf))||!Position(leg.foot,foot)) return false;
         const auto residual=ik::Length(ik::Sub(foot,solution.ankle));
         leg.lastResidual=residual;leg.failureStep=7;
-        if (!std::isfinite(residual)||residual>(leg.upper+leg.lower)*0.002f) return false;
+        // Transform setters are quantized by Unity and the native animation
+        // pass may run between the two writes.  A small residual is therefore
+        // a recoverable frame miss, not a session/identity fault.  Keep the
+        // already-written pose, record it, and continue the other leg/frame;
+        // larger residuals remain visible in diagnostics and are skipped too
+        // rather than tearing down an otherwise valid dance session.
+        if (!std::isfinite(residual)) return false;
+        if (residual>(leg.upper+leg.lower)*0.01f) { ++leg.rejectedTicks; continue; }
         leg.maxResidual=std::max(leg.maxResidual,residual);leg.clamped+=solution.clamped; ++leg.ticks;
         const auto footInput=basis::ModelInput(vmd::Sample(clip.tracks[leg.track],frame));
         const auto footWorld=vmd::Multiply(rotation,vmd::Slerp(leg.firstFoot,vmd::Multiply(footInput,leg.firstFoot),blend));
@@ -1935,8 +1947,9 @@ void ReportMotion(std::ostream& report) {
         const auto& leg=playback.legs[side];
         report << "[FOOT_IK] side=" << side << " track=" << leg.track << " upper=" << leg.upper << " lower=" << leg.lower << " ticks=" << leg.ticks
             << " clamped=" << leg.clamped << " enabled_ticks=" << leg.enabledTicks << " toggle_track=" << leg.toggleTrack << " max_residual=" << leg.maxResidual << " units=" << ikUnits << " IK_quaternion_writes=" << playback.ikWrites
-            << " failure_step=" << leg.failureStep << " last_upper=" << leg.lastUpper << " last_lower=" << leg.lastLower << " last_residual=" << leg.lastResidual
+            << " rejected_ticks=" << leg.rejectedTicks << " failure_step=" << leg.failureStep << " last_upper=" << leg.lastUpper << " last_lower=" << leg.lastLower << " last_residual=" << leg.lastResidual
             << " chain_ready=" << leg.chainReady << " target_ready=" << leg.targetReady << " pole_ready=" << leg.poleReady
+            << " pole_world=" << leg.pole.x << ',' << leg.pole.y << ',' << leg.pole.z
             << " ground_candidate_ready=" << leg.groundReady << " ground_clamped=" << leg.groundClamped
             << " target_f0=" << leg.targetFrame0.x << ',' << leg.targetFrame0.y << ',' << leg.targetFrame0.z
             << " target_f30=" << leg.targetFrame30.x << ',' << leg.targetFrame30.y << ',' << leg.targetFrame30.z
