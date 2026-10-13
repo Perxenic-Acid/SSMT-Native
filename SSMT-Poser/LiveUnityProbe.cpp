@@ -372,10 +372,10 @@ bool ValidateAnimatorIKPositionWrapper(const NativeMethod& method, std::ostream&
         report << "[ANIMATOR_IK_POSITION_ABI] ready=0 reason=descriptor_or_parameter_count\n";
         return false;
     }
-    // The first instruction sequence is independent of the goal argument and
-    // proves that RCX is the caller-owned Vector3 return buffer.  Do not call
-    // a candidate that does not preserve this established Vector3 convention.
-    if (!Pattern(method.entry, 3, "48 89 CE")) {
+    // The generated wrapper may save RCX after a short prologue (the Internal
+    // variant starts with `push rsi`). Search only the entry block, and require
+    // the established move into a callee-saved register before making a call.
+    if (!Pattern(method.entry, 32, "48 89 CE")) {
         report << "[ANIMATOR_IK_POSITION_ABI] ready=0 reason=vector3_sret_prefix\n";
         return false;
     }
@@ -1380,7 +1380,12 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
     job.animatorLayerMethodsReady =
         Method(runtime, "Animator", "get_layerCount", 0, job.animatorLayerCount) &&
         Method(runtime, "Animator", "GetLayerEnableOnAnimatorIK", 1, job.animatorLayerEnable);
+    // The Internal wrapper exposes the same Vector3 ABI without the public
+    // managed guard. Prefer it for read-only evidence, with the public and
+    // NoThreadCheck variants as compatibility fallbacks.
     job.animatorIkPositionMethodReady =
+        Method(runtime, "Animator", "GetIKPositionInternal", 1, job.animatorIkGetPosition) ||
+        Method(runtime, "Animator", "GetIKPositionNoThreadCheck", 1, job.animatorIkGetPosition) ||
         Method(runtime, "Animator", "GetIKPosition", 1, job.animatorIkGetPosition);
     if (job.animatorIkPositionMethodReady)
         job.animatorIkPositionAbiReady = ValidateAnimatorIKPositionWrapper(job.animatorIkGetPosition, report);
