@@ -17,8 +17,11 @@
 #include <sstream>
 
 namespace poser {
-bool footIK=false;
+bool footIK=false,footIKWriteRequested=false;
 float ikUnits=0;
+uint32_t groundHeightMetadataId=0;
+uintptr_t groundHeightEntry=0,groundHeightDescriptor=0;
+const char* footIKBlocker="NOT_CONFIGURED";
 namespace {
 constexpr unsigned MaxRig=256,MaxSources=128,MaxSamples=64,MaxSnapshots=16;
 // Secondary-motion telemetry is deliberately small and read-only.  It gives
@@ -29,10 +32,6 @@ constexpr unsigned MaxReferenceMeshes=64;
 // Nominal scale: 10 VMD units -> 1 Unity unit. This remains an empirical
 // calibration until the motion's matching PMX or a live axis test is available.
 constexpr float VmdPositionScale=0.1f;
-// The previous analytic two-bone path produced invalid leg poses in live
-// playback. Keep its write path compile-time disabled until a verified game
-// IK callback and target-space contract replace it.
-constexpr bool AnalyticFootIkEnabled=false;
 struct ReferenceMesh {
     uintptr_t renderer=0,native=0,transform=0,transformNative=0,array=0,mesh=0,meshNative=0;
     uint32_t handles[3]{};
@@ -66,9 +65,12 @@ struct Source {
 struct Leg {
     int thigh=-1,calf=-1,foot=-1,track=-1,parentTrack=-1,toggleTrack=-1;
     Vector3 anchor,pole,initialTarget;
+    Vector3 lastGoal{},lastGround{};
+    float soleOffset=0,groundY0=0;
     Quaternion firstFoot{0,0,0,1};
     float upper=0,lower=0,maxResidual=0,lastUpper=0,lastLower=0,lastResidual=0;
     unsigned ticks=0,enabledTicks=0,clamped=0,failureStep=0;
+    unsigned groundQueries=0;
     // These fields describe the safe target pipeline even while the actual
     // writer is gated. They are POD state copied into the session report.
     bool chainReady=false,targetReady=false,poleReady=false,groundReady=false;
@@ -209,18 +211,29 @@ std::atomic<bool> configured{false};
 std::atomic<float> progressSeconds{0};
 basis::Settings abSettings;
 bool FootIKWritePathEnabled() {
-    return AnalyticFootIkEnabled&&footIK&&!abSettings.enabled;
+    return footIKWriteRequested&&footIK&&groundHeightMetadataId==702885&&groundHeightEntry&&
+        groundHeightDescriptor&&!abSettings.enabled;
 }
 bool IkToggle(const Leg& leg,double frame) {
     return leg.toggleTrack<0 ||
         vmd::SampleIkEnabled(clip,clip.ikTracks[size_t(leg.toggleTrack)].name,frame);
 }
-void ConfigureFootIKDiagnosticsImpl(float units) {
+void ConfigureFootIKDiagnosticsImpl(float units,bool requestWrites,uint32_t metadataId,
+    uintptr_t entry,uintptr_t descriptor) {
+    footIKWriteRequested=requestWrites;
+    groundHeightMetadataId=metadataId;
+    groundHeightEntry=entry;
+    groundHeightDescriptor=descriptor;
+    footIKBlocker="NOT_CONFIGURED";
     if (std::isfinite(units)&&units>0.0f&&units<=100.0f) {
         footIK=true;ikUnits=units;
     } else {
         footIK=false;ikUnits=0.0f;
     }
+    if(!footIKWriteRequested)footIKBlocker="WRITE_FLAG_ABSENT";
+    else if(!footIK)footIKBlocker="INVALID_VMD_SCALE";
+    else if(groundHeightMetadataId!=702885||!groundHeightEntry||!groundHeightDescriptor)footIKBlocker="GROUND_METHOD_UNAVAILABLE";
+    else footIKBlocker="AWAITING_PLAYBACK_GATES";
 }
 std::filesystem::path abOutput;
 std::atomic<unsigned> abStage{UINT_MAX};
@@ -888,6 +901,12 @@ bool FreezeActorRoot() {
 bool WorldRotation(int index,Quaternion& out) {
     const auto& bone=playback.bones[index];return BoneIdentity(bone)&&ReadBoneWorldRotation(bone.identity.object,bone.identity.native,out);
 }
+bool GroundHeight(Vector3 world,float& height) {
+    if(!groundHeightEntry||!groundHeightDescriptor||groundHeightMetadataId!=702885||!ik::Finite(world))return false;
+    const auto value=reinterpret_cast<float (*)(float,float,uintptr_t)>(groundHeightEntry)(world.x,world.z,groundHeightDescriptor);
+    if(!std::isfinite(value)||value<=-1.0e7f||value>1.0e7f)return false;
+    height=value;return true;
+}
 bool IKSet(int index,Quaternion world) {
     auto& bone=playback.bones[index];Quaternion parent{},after{};
     if (bone.identity.parent<0 || !WorldRotation(bone.identity.parent,parent)) return false;
@@ -901,23 +920,18 @@ bool IKSet(int index,Quaternion world) {
 }
 bool PrepareIK() {
     const bool writer=FootIKWritePathEnabled();
+    if(writer)footIKBlocker="LEG_TARGET_OR_CHAIN_REJECTED";
     for (auto& leg:playback.legs) if (leg.track>=0) {
         leg.targetReady=false;leg.poleReady=false;leg.groundReady=false;leg.groundClamped=false;
-        const auto sampleTarget=[&](double frame,Vector3& out,bool& groundClamped) {
+        leg.groundY0=0;leg.soleOffset=0;
+        leg.lastGoal={};leg.lastGround={};leg.groundQueries=0;
+        const auto sampleTarget=[&](double frame,Vector3& out) {
             const auto target=vmd::SamplePosition(clip.tracks[size_t(leg.track)],frame);
             const auto parent=leg.parentTrack>=0?vmd::SamplePosition(clip.tracks[size_t(leg.parentTrack)],frame):Vector3{};
-            if (!ik::ModelTarget(target,parent,out)) return false;
-            Vector3 ground{};bool clamped=false;
-            // No terrain getter is verified yet. A zero model plane is only a
-            // deterministic calibration candidate and is never written.
-            if (!ik::GroundCandidate(out,0.0f,0.0f,ground,clamped)) return false;
-            groundClamped=clamped;return true;
+            return ik::ModelTarget(target,parent,out);
         };
-        bool clamp0=false,clamp30=false,clamp120=false;
-        leg.targetReady=sampleTarget(0,leg.targetFrame0,clamp0)&&
-            sampleTarget(30,leg.targetFrame30,clamp30)&&sampleTarget(120,leg.targetFrame120,clamp120);
-        leg.groundReady=leg.targetReady;
-        leg.groundClamped=clamp0||clamp30||clamp120;
+        leg.targetReady=sampleTarget(0,leg.targetFrame0)&&
+            sampleTarget(30,leg.targetFrame30)&&sampleTarget(120,leg.targetFrame120);
         // The VMD IK block is a separate state track. Capture its reference
         // states up front so the playback report can prove that OFF intervals
         // are honored even while the transform writer remains gated.
@@ -928,13 +942,7 @@ bool PrepareIK() {
         leg.toggleSamples=leg.toggleEnabledSamples=leg.toggleDisabledSamples=0;
         if (!leg.targetReady) {if(writer)return false;continue;}
         if (!leg.chainReady) {if(writer)return false;continue;}
-        Vector3 root{};Quaternion rotation{};
-        if (!Position(playback.root,root)||!WorldRotation(playback.root,rotation)) {if(writer)return false;continue;}
         Vector3 hip{},knee{},foot{};Quaternion footRotation{};
-        for (int index : {leg.thigh,leg.calf,leg.foot}) {
-            Vector3 local{};const auto& bone=playback.bones[index];
-            if (!ReadBonePosition(bone.identity.object,bone.identity.native,local,false)) {if(writer)return false;continue;}
-        }
         if (!Position(leg.thigh,hip)||!Position(leg.calf,knee)||!Position(leg.foot,foot)||!WorldRotation(leg.foot,footRotation)) {if(writer)return false;continue;}
         leg.upper=ik::Length(ik::Sub(knee,hip));leg.lower=ik::Length(ik::Sub(foot,knee));
         if (!std::isfinite(leg.upper)||!std::isfinite(leg.lower)||leg.upper<0.0001f||leg.lower<0.0001f||leg.upper>100||leg.lower>100) {if(writer)return false;continue;}
@@ -945,25 +953,60 @@ bool PrepareIK() {
         if (restUpper<0.0001f||restLower<0.0001f) {if(writer)return false;continue;}
         const auto scale=leg.upper/restUpper;
         if (std::fabs(leg.lower/restLower-scale)>scale*0.01f) {if(writer)return false;continue;}
-        // A collinear bind chain has no verified pole.  Do not invent one:
-        // the writer remains disabled until a game/native IK path supplies a
-        // valid bend plane.
-        leg.poleReady=ik::PoleDirection(restHip,restKnee,restFoot,leg.pole);
+        // Bind positions are model-space. Derive the pole from the live world
+        // chain so the solver never mixes those coordinates with world poses.
+        leg.poleReady=ik::PoleDirection(hip,knee,foot,leg.pole);
         if (!leg.poleReady) {if(writer)return false;continue;}
         // VMD IK positions are model-space targets, not offsets from the
         // game's bind foot. Retarget motion relative to frame 0 so the
         // opening frame cannot double-apply its absolute target.
         leg.initialTarget=leg.targetFrame0;
-        leg.anchor=restFoot;
+        leg.anchor=ik::Add(foot,ik::Rotate(playback.actorRootWorldRestoreRotation,RootMotion(0)));
         leg.firstFoot=playback.bones[leg.foot].rest.rotation;
+        float groundY=0;
+        if(GroundHeight(leg.anchor,groundY)) {
+            const auto offset=leg.anchor.y-groundY;
+            if(std::isfinite(offset)&&offset>=-0.25f&&offset<=3.0f) {
+                leg.groundY0=groundY;
+                leg.soleOffset=std::max(0.0f,offset);
+                const auto targetAt=[&](double frame,Vector3& out) {
+                    Vector3 target{};
+                    const auto raw=vmd::SamplePosition(clip.tracks[size_t(leg.track)],frame);
+                    const auto parent=leg.parentTrack>=0?vmd::SamplePosition(clip.tracks[size_t(leg.parentTrack)],frame):Vector3{};
+                    if(!ik::ModelTarget(raw,parent,target))return false;
+                    const auto rootDelta=ik::Sub(RootMotion(frame),RootMotion(0));
+                    if(!ik::Finite(rootDelta)||!ik::Finite(target))return false;
+                    out=ik::Goal(leg.anchor,playback.actorRootWorldRestoreRotation,rootDelta,
+                        ik::Sub(target,leg.initialTarget),ikUnits);
+                    return ik::Finite(out);
+                };
+                Vector3 goal30{},goal120{},groundFrame0{},groundFrame30{},groundFrame120{};
+                float ground30=0,ground120=0;bool c0=false,c30=false,c120=false;
+                leg.groundReady=targetAt(30,goal30)&&targetAt(120,goal120)&&
+                    ik::GroundCandidate(leg.anchor,groundY,leg.soleOffset,groundFrame0,c0)&&
+                    GroundHeight(goal30,ground30)&&ik::GroundCandidate(goal30,ground30,leg.soleOffset,groundFrame30,c30)&&
+                    GroundHeight(goal120,ground120)&&ik::GroundCandidate(goal120,ground120,leg.soleOffset,groundFrame120,c120);
+                if(leg.groundReady) {
+                    leg.groundFrame0=groundFrame0;leg.groundFrame30=groundFrame30;leg.groundFrame120=groundFrame120;
+                    leg.groundClamped=c0||c30||c120;
+                }
+            }
+        }
+        if(writer&&!leg.groundReady){footIKBlocker="GROUND_QUERY_REJECTED";return false;}
         leg.ticks=0;leg.clamped=0;leg.maxResidual=0;
     }
+    if(writer)for(const auto& leg:playback.legs) {
+        if(leg.track<0){footIKBlocker="VMD_LEG_IK_TRACK_MISSING";return false;}
+        if(!leg.chainReady){footIKBlocker="LEG_CHAIN_MISMATCH";return false;}
+        if(!leg.targetReady||!leg.poleReady||!leg.groundReady){footIKBlocker="LEG_REFERENCE_INCOMPLETE";return false;}
+    }
+    if(writer)footIKBlocker="READY";
     return true;
 }
 bool SolveIK(double frame,float blend) {
     if (!FootIKWritePathEnabled()) return true;
-    Vector3 root{};Quaternion rotation{};
-    if (!Position(playback.root,root)||!WorldRotation(playback.root,rotation)) return false;
+    Quaternion rotation{};
+    if (!WorldRotation(playback.root,rotation)) return false;
     for (unsigned side=0;side<2;++side) {
         auto& leg=playback.legs[side];
         if (leg.track<0) continue;
@@ -975,9 +1018,17 @@ bool SolveIK(double frame,float blend) {
         const auto parent=leg.parentTrack>=0?vmd::SamplePosition(clip.tracks[leg.parentTrack],frame):Vector3{};
         if (!ik::ModelTarget(target,parent,delta)) return false;
         delta=ik::Sub(delta,leg.initialTarget);
-        // Bip001 已在本帧先接管 Center/Groove 位移；足目标使用 setter
-        // 回读的完整 localPosition，保留原生启动基线并跟随 VMD 位移。
-        const auto goal=ik::Goal(root,rotation,leg.anchor,delta,ikUnits*blend,playback.rootWrittenPosition);
+        // All positional terms are relative to frame 0. The actual opening
+        // ankle world point is the anchor; the Bip001 native baseline is not
+        // added a second time.
+        const auto rootDelta=ik::Scale(ik::Sub(RootMotion(frame),RootMotion(0)),blend);
+        auto goal=ik::Goal(leg.anchor,rotation,rootDelta,delta,ikUnits*blend);
+        float groundY=0;bool groundClamped=false;
+        leg.failureStep=31;
+        if(!GroundHeight(goal,groundY)){footIKBlocker="GROUND_QUERY_RUNTIME_FAILED";return false;}
+        if(!ik::GroundCandidate(goal,groundY,leg.soleOffset,goal,groundClamped)){footIKBlocker="GROUND_CANDIDATE_INVALID";return false;}
+        leg.lastGoal=goal;leg.lastGround={goal.x,groundY,goal.z};++leg.groundQueries;
+        leg.groundClamped=leg.groundClamped||groundClamped;
         Vector3 hip{},knee{},foot{};Quaternion thigh{},calf{};
         leg.failureStep=1;
         if (!Position(leg.thigh,hip)||!Position(leg.calf,knee)||!Position(leg.foot,foot)||!WorldRotation(leg.thigh,thigh)) return false;
@@ -987,7 +1038,7 @@ bool SolveIK(double frame,float blend) {
         if (std::fabs(actualUpper-leg.upper)>leg.upper*0.01f||std::fabs(actualLower-leg.lower)>leg.lower*0.01f) return false;
         ik::Solution solution;
         leg.failureStep=3;
-        if (!ik::Solve(hip,goal,ik::Rotate(rotation,leg.pole),leg.upper,leg.lower,solution)) return false;
+        if (!ik::Solve(hip,goal,leg.pole,leg.upper,leg.lower,solution)) return false;
         leg.failureStep=4;
     if (!IKSet(leg.thigh,vmd::Multiply(ik::FromTo(ik::Sub(knee,hip),ik::Sub(solution.knee,hip)),thigh))) return false;
         leg.failureStep=5;
@@ -1592,9 +1643,8 @@ bool LoadMotionClip(const std::filesystem::path& path,std::ostream& report,HANDL
     if (!vmd::Load(path,loaded,error,stop)) { report << "motion_load=REJECTED; reason=" << error << '\n'; report.flush(); return false; }
     report << "[VMD_FILE] bytes=" << loaded.bytes << " bone_keys=" << loaded.boneKeys << " tracks=" << loaded.tracks.size()
         << " ik_tracks=" << loaded.ikTracks.size() << " last_frame=" << loaded.lastFrame << " fps=30 camera_keys=" << loaded.cameraKeys << " morph_keys=" << loaded.morphKeys << '\n';
-    // Keep the VMD IK target data observable while the analytic writer is
-    // disabled. These samples establish the raw -> MODEL_Y_180 conversion
-    // and parent-track composition needed by the future game-native path.
+    // Model-space key samples are kept separate from runtime world-space
+    // ground queries; no fake Y=0 plane is presented as terrain evidence.
     const auto reportFootTarget=[&](const char* side,const wchar_t* targetName,const wchar_t* targetAlt,
         const wchar_t* parentName,const wchar_t* parentAlt) {
         auto targetTrack=vmd::FindTrack(loaded,targetName);
@@ -1605,27 +1655,28 @@ bool LoadMotionClip(const std::filesystem::path& path,std::ostream& report,HANDL
             << " parent_track=" << parentTrack
             << " target_keys=" << (targetTrack>=0?loaded.tracks[size_t(targetTrack)].keys.size():0)
             << " parent_keys=" << (parentTrack>=0?loaded.tracks[size_t(parentTrack)].keys.size():0)
-            << " coordinate_contract=VMD_MODEL_TO_MODEL_Y_180; writer=BLOCKED\n";
+            << " coordinate_contract=VMD_MODEL_Y_180; world_anchor=CAPTURED_AT_PLAYBACK_START; writer="
+            << (FootIKWritePathEnabled()?"OPT_IN_RUNTIME_GATED":"BLOCKED_BY_DEFAULT") << '\n';
         for (const double requestedFrame : {0.0,30.0,120.0}) {
             const auto raw=targetTrack>=0?vmd::SamplePosition(loaded.tracks[size_t(targetTrack)],requestedFrame):Vector3{};
             const auto parentRaw=parentTrack>=0?vmd::SamplePosition(loaded.tracks[size_t(parentTrack)],requestedFrame):Vector3{};
             const auto model=ik::ModelPosition(raw),parentModel=ik::ModelPosition(parentRaw);
-            Vector3 combined{},ground{};bool combinedValid=false,groundValid=false,clamped=false;
+            Vector3 combined{};bool combinedValid=false;
             if (targetTrack>=0) combinedValid=ik::ModelTarget(raw,parentRaw,combined);
-            if (combinedValid) groundValid=ik::GroundCandidate(combined,0.0f,0.0f,ground,clamped);
             report << "  sample_frame=" << requestedFrame << " raw=" << raw.x << ',' << raw.y << ',' << raw.z
                 << " model=" << model.x << ',' << model.y << ',' << model.z
                 << " parent_raw=" << parentRaw.x << ',' << parentRaw.y << ',' << parentRaw.z
                 << " parent_model=" << parentModel.x << ',' << parentModel.y << ',' << parentModel.z
                 << " combined_model=" << combined.x << ',' << combined.y << ',' << combined.z
-                << " target_valid=" << combinedValid << " ground_candidate=" << groundValid
-                << " ground_clamped=" << clamped << " ground_plane=DIAGNOSTIC_Y0_NOT_GAME_TERRAIN\n";
+                << " target_valid=" << combinedValid
+                << " world_ground=REQUIRES_LIVE_ANKLE_ANCHOR_AND_GAME_QUERY\n";
         }
     };
     reportFootTarget("L",L"左足ＩＫ",L"左足IK",L"左足ＩＫ親",L"左足IK親");
     reportFootTarget("R",L"右足ＩＫ",L"右足IK",L"右足ＩＫ親",L"右足IK親");
-    report << "[FOOT_IK_GATE] analytic_solver=DISABLED compile_time=0 runtime_flag=" << footIK
-        << " writes=BLOCKED reason=WAIT_FOR_VERIFIED_GAME_NATIVE_IK_PATH\n";
+    report << "[FOOT_IK_GATE] analytic_solver=AVAILABLE opt_in=" << footIKWriteRequested
+        << " runtime_flag=" << footIK << " ground_metadata_id=" << groundHeightMetadataId
+        << " writes=0 blocker=" << footIKBlocker << " until_playback_runtime_gates\n";
     for (const auto& track : loaded.ikTracks) {
         char name[128]{}; WideCharToMultiByte(CP_UTF8,0,track.name.c_str(),-1,name,sizeof(name),nullptr,nullptr);
         report << "[VMD_IK_TRACK] name=" << name << " keys=" << track.keys.size()
@@ -1641,7 +1692,7 @@ bool LoadMotionClip(const std::filesystem::path& path,std::ostream& report,HANDL
             report << track.keys[i].frame << ':' << (track.keys[i].enabled?"ON":"OFF");
         }
         report << " events_truncated=" << (track.keys.size()>eventCount)
-            << " runtime_solver=DISABLED\n";
+            << " runtime_solver=OPT_IN_RUNTIME_GATED\n";
     }
     if (loaded.tracks.empty() || !loaded.lastFrame) { report << "motion_load=REJECTED; reason=" << (loaded.tracks.empty()?"NO_BONE_TRACKS_CAMERA_OR_MORPH_ONLY":"STATIC_POSE_NO_TIMED_MOTION") << '\n'; report.flush(); return false; }
     char sourceModel[256]{};WideCharToMultiByte(CP_UTF8,0,loaded.model.c_str(),-1,sourceModel,sizeof(sourceModel),nullptr,nullptr);
@@ -1670,7 +1721,7 @@ bool LoadMotionClip(const std::filesystem::path& path,std::ostream& report,HANDL
     report << "motion_load=" << ((playback.mapped && playback.writeBones)||rootTrack?"READY":"REJECTED_UNMAPPED") << " mapped_tracks=" << playback.mapped
         << " write_bones=" << playback.writeBones << " controlled_bones=" << playback.controlledBones << " passthrough_bones=" << playback.passthroughBones
         << " retarget=STATIC_MESH_BIND_REFERENCE; positions=ROOT_BIP001_LOCAL; root_motion=Center+Groove; center_track=" << centerTrack
-        << " groove_track=" << grooveTrack << " vmd_position_scale=" << VmdPositionScale << "; axis=MODEL_Y_180; foot_IK=" << (abSettings.enabled?"EXCLUDED_AB_TEST":FootIKWritePathEnabled()?"ANALYTIC_TWO_BONE_PREVIEW":"DISABLED_ANALYTIC_SOLVER") << "; morphs=NOT_APPLIED\n";
+        << " groove_track=" << grooveTrack << " vmd_position_scale=" << VmdPositionScale << "; axis=MODEL_Y_180; foot_IK=" << (abSettings.enabled?"EXCLUDED_AB_TEST":FootIKWritePathEnabled()?"OPT_IN_ANALYTIC_TWO_BONE":"DISABLED_BY_DEFAULT") << "; morphs=NOT_APPLIED\n";
     if (FootIKWritePathEnabled()) {
         unsigned legs=0;for (const auto& leg:playback.legs) legs+=leg.track>=0;
         report << "foot_IK_legs=" << legs << " game_units_per_VMD_unit=" << ikUnits << " calibration=STATIC_BIND_FRAME0_RELATIVE_TARGET; ik_toggle_tracks=CONSUMED; source_PMX_rest=NOT_AVAILABLE; D_grants=NOT_APPLIED\n";
@@ -1875,9 +1926,11 @@ void ReportMotion(std::ostream& report) {
         report << " expected=0x" << std::hex << playback.ownerFailureExpected
             << " observed=0x" << playback.ownerFailureObserved << std::dec << '\n';
     }
-    report << "[FOOT_IK_GATE] analytic_solver=DISABLED compile_time=0 runtime_flag=" << footIK
-        << " writes=" << playback.ikWrites << " target_space=VMD_MODEL_TO_MODEL_Y_180"
-        << " reason=WAIT_FOR_VERIFIED_GAME_NATIVE_IK_PATH\n";
+    report << "[FOOT_IK_GATE] analytic_solver=AVAILABLE opt_in=" << footIKWriteRequested
+        << " runtime_flag=" << footIK << " ground_metadata_id=" << groundHeightMetadataId
+        << " writes=" << playback.ikWrites << " blocker=" << footIKBlocker
+        << " target_space=MODEL_Y_180_TO_WORLD_ANCHORED_FRAME0"
+        << " ground_query=CalcCurrentGroundHeight_WORLD_XZ; sole_offset=CAPTURED_ANKLE_TO_GROUND\n";
     for (unsigned side=0;side<2;++side) if (footIK||playback.legs[side].track>=0) {
         const auto& leg=playback.legs[side];
         report << "[FOOT_IK] side=" << side << " track=" << leg.track << " upper=" << leg.upper << " lower=" << leg.lower << " ticks=" << leg.ticks
@@ -1891,8 +1944,16 @@ void ReportMotion(std::ostream& report) {
             << " toggle_f0=" << leg.toggleFrame0 << " toggle_f30=" << leg.toggleFrame30 << " toggle_f120=" << leg.toggleFrame120
             << " toggle_samples=" << leg.toggleSamples << " toggle_enabled_samples=" << leg.toggleEnabledSamples
             << " toggle_disabled_samples=" << leg.toggleDisabledSamples << " toggle_last=" << leg.lastToggleState
-            << " target_mode=STATIC_BIND_PLUS_VMD_FRAME0_DELTA"
-            << " ground_plane=DIAGNOSTIC_Y0_NOT_GAME_TERRAIN writer=" << (FootIKWritePathEnabled()?"BLOCKED_UNTIL_NATIVE_IK":"BLOCKED") << '\n';
+            << " target_mode=LIVE_ANKLE_WORLD_ANCHOR_PLUS_FRAME0_ROOT_AND_IK_DELTA"
+            << " target_world_f0=" << leg.anchor.x << ',' << leg.anchor.y << ',' << leg.anchor.z
+            << " ground_y0=" << leg.groundY0 << " ankle_clearance=" << leg.soleOffset
+            << " ground_world_f0=" << leg.groundFrame0.x << ',' << leg.groundFrame0.y << ',' << leg.groundFrame0.z
+            << " ground_world_f30=" << leg.groundFrame30.x << ',' << leg.groundFrame30.y << ',' << leg.groundFrame30.z
+            << " ground_world_f120=" << leg.groundFrame120.x << ',' << leg.groundFrame120.y << ',' << leg.groundFrame120.z
+            << " runtime_ground_queries=" << leg.groundQueries
+            << " runtime_goal=" << leg.lastGoal.x << ',' << leg.lastGoal.y << ',' << leg.lastGoal.z
+            << " runtime_ground=" << leg.lastGround.x << ',' << leg.lastGround.y << ',' << leg.lastGround.z
+            << " writer=" << (FootIKWritePathEnabled()?"OPT_IN_AFTER_RUNTIME_GATES":"BLOCKED") << '\n';
     }
     for (unsigned i=0;i<playback.sampleCount;++i) {
         const auto& sample=playback.samples[i];
@@ -1901,7 +1962,8 @@ void ReportMotion(std::ostream& report) {
     }
     report.flush();
 }
-void ConfigureFootIKDiagnostics(float units) {
-    ConfigureFootIKDiagnosticsImpl(units);
+void ConfigureFootIKDiagnostics(float units,bool requestWrites,uint32_t metadataId,
+    uintptr_t entry,uintptr_t descriptor) {
+    ConfigureFootIKDiagnosticsImpl(units,requestWrites,metadataId,entry,descriptor);
 }
 }

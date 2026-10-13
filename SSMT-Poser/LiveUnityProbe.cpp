@@ -1563,10 +1563,14 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
     if (GetFileAttributesW(ikScalePath.c_str())!=INVALID_FILE_ATTRIBUTES) {
         std::ifstream scaleFile(ikScalePath);scaleFile>>requestedIkUnits;
     }
-    ConfigureFootIKDiagnostics(requestedIkUnits);
-    report << "foot_IK=DIAGNOSTICS_ONLY; requested_units=" << requestedIkUnits
+    const bool requestFootIKWrites=GetFileAttributesW((directory/L"foot_ik_write.flag").c_str())!=INVALID_FILE_ATTRIBUTES;
+    ConfigureFootIKDiagnostics(requestedIkUnits,requestFootIKWrites,job.groundHeight.metadataId,
+        job.groundHeightReady?job.groundHeight.entry:0,job.groundHeightReady?job.groundHeight.descriptor:0);
+    report << "foot_IK=ANALYTIC_TWO_BONE; requested_units=" << requestedIkUnits
+        << " write_requested=" << requestFootIKWrites
         << " valid_scale=" << (std::isfinite(requestedIkUnits)&&requestedIkUnits>0.0f&&requestedIkUnits<=100.0f)
-        << "; writes=BLOCKED; reason=WAIT_FOR_GAME_NATIVE_IK_PATH\n";
+        << " ground_method=" << (job.groundHeightReady?"702885_VERIFIED":"UNAVAILABLE")
+        << "; writes=" << (requestFootIKWrites&&job.groundHeightReady&&std::isfinite(requestedIkUnits)&&requestedIkUnits>0.0f&&requestedIkUnits<=100.0f?"OPT_IN_AFTER_RUNTIME_GATES":"BLOCKED_BY_DEFAULT") << '\n';
     job.fbikProbeEnabled = GetFileAttributesW((directory/L"fbik_probe.flag").c_str()) != INVALID_FILE_ATTRIBUTES;
     report << "fbik_probe=" << (job.fbikProbeEnabled ? "ARMED_READONLY_COUNTS" : "DISABLED_METADATA_ONLY") << '\n';
     if (GetFileAttributesW((directory/L"arm_test.flag").c_str())!=INVALID_FILE_ATTRIBUTES) {

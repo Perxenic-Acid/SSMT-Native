@@ -36,9 +36,9 @@ inline bool PoleDirection(Vector3 hip,Vector3 knee,Vector3 foot,Vector3& out) {
     out=Unit(bend);
     return Finite(out)&&Length(out)>0.5f;
 }
-// Read-only ground calibration helper.  Both inputs must already be in the
-// same actor/world space; this only returns a candidate and never touches a
-// Unity Transform or terrain API.  MODEL_Y_180 uses +Y as up.
+// Ground calibration helper. Both inputs must already be in the same world
+// space; this only adjusts a candidate and never touches a Unity Transform.
+// MODEL_Y_180 uses +Y as up.
 inline bool GroundCandidate(Vector3 target,float groundY,float soleOffset,Vector3& out,bool& clamped) {
     if (!Finite(target)||!std::isfinite(groundY)||!std::isfinite(soleOffset)) return false;
     const auto floor=groundY+soleOffset;
@@ -46,10 +46,12 @@ inline bool GroundCandidate(Vector3 target,float groundY,float soleOffset,Vector
     if (clamped) out.y=floor;
     return Finite(out);
 }
-// 足 IK 目标与 Bip001 位移使用同一 Actor-local 参考。rootLocal 是本帧
-// Bip001.localPosition 的完整值，不能只传 VMD delta，否则会丢失原生启动基线。
-inline Vector3 Goal(Vector3 actorRoot,Quaternion actorRotation,Vector3 anchor,Vector3 ikDelta,float ikScale,Vector3 rootLocal) {
-    return Add(actorRoot,Rotate(actorRotation,Add(anchor,Add(Scale(ikDelta,ikScale),rootLocal))));
+// Anchor is the live ankle world position captured before playback. Root and
+// IK deltas are relative to frame 0, so the native Bip001 baseline is never
+// added to the bind-model anchor a second time.
+inline Vector3 Goal(Vector3 anchorWorld,Quaternion actorRotation,Vector3 rootDelta,
+    Vector3 ikDelta,float ikScale) {
+    return Add(anchorWorld,Rotate(actorRotation,Add(rootDelta,Scale(ikDelta,ikScale))));
 }
 inline Quaternion FromTo(Vector3 from,Vector3 to) {
     from=Unit(from);to=Unit(to);const auto d=std::clamp(Dot(from,to),-1.0f,1.0f);

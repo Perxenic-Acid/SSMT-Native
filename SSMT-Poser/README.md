@@ -224,11 +224,9 @@ VMD 第 0 帧可以包含非单位旋转与非零位移，它代表开场动作�
 源 PMX 的静止姿态 / 骨轴与目标 Mesh 的 A-pose 是两套参考；当前标准 MMD 层级未取得源 PMX
 reference，不能由首帧反推出模型基准。需要独立核验源 / 目标参考转换和 IK / center 位移关系。
 
-历史实验曾通过诊断目录 `foot_ik_scale.txt` 配置“游戏单位 / VMD 位移单位”，并以分析式两骨解算写入大腿、小腿、脚旋转。实机反馈为腿部严重变形，且会以残差故障中断；该入口现已禁用。位置 / 世界旋转 getter 与 `Transform.set_localPosition` 均经当前样本 wrapper / native
-consumer ABI 校验，局部位置与原生 TRS 字段对照，输出缓冲区带 canary。根位移只写入
-已经核验的 `Bip001`，不直接写 Actor Root。
+分析式双骨腿部 IK 已重新接入，但默认不写。诊断目录同时存在 `foot_ik_scale.txt` 正比例和显式 `foot_ik_write.flag` 时才请求写入；播放启动还要求左右 VMD IK 轨道、两条 thigh/calf/foot 父链、非退化弯曲平面、肢段比例及游戏地面查询全部通过。目标从开播实际脚踝世界位置锚定，叠加相对第 0 帧的 `MODEL_Y_180` Center/Groove 与足 IK 位移；每帧在世界 X/Z 查询 `Miscs.CalcCurrentGroundHeight`（metadata ID `702885`），并保留开播脚踝枢轴相对地面的高度。任何检查失败都拒绝开始或停止求解，并经现有恢复路径交还骨骼。
 
-VMD 不包含源 PMX 骨长和 rest pose；没有完整 PMX grant / 足 D 骨修正、脚趾 IK 或源 PMX root 语义，不能宣称还原源舞蹈。IK 开关轨道仍被解析，但当前不触发游戏骨骼写入。目标 Unity `Animator` metadata 暴露 FBIK effector / chain API；它尚待在主线程上只读盘点 index、空间与调用时序后再接入。
+当前地面高度校准的是脚踝 Transform 枢轴，不是鞋底接触点；脚踝到地面的开播间距只是静态 clearance，尚未证明适用于不同鞋型、跳跃或复杂地形。解析式 solver 的接线、坐标和地面数值必须经真实游戏画面验收，不能仅凭 `ik_writes` 或残差宣称脚底贴地正确。VMD 不包含源 PMX 骨长和 rest pose；没有完整 PMX grant / 足 D 骨修正、脚趾 IK 或源 PMX root 语义，不能宣称还原源舞蹈。目标 `Animator` 的 FBIK 运行时盘点为零 effector / chain，因此本阶段采用受控 Transform 解算，不调用未经验证的 Animator FBIK setter。
 
 写入在已核验的 ScriptRunBehaviourLateUpdate 返回后执行，目标与桥接父骨持有强 root，
 每帧检查对象 / native / parent 身份并回读 localRotation；只写选定 Actor 的旋转。

@@ -19,9 +19,9 @@ struct MotionRigBone {
     wchar_t name[128]{};
 };
 void ConfigureMotionMode();
-// Configure the read-only foot target diagnostics. A valid positive scale
-// never enables writes; the native/game IK gate remains independent.
-void ConfigureFootIKDiagnostics(float units);
+// Writes remain opt-in and require the metadata-gated game ground query.
+void ConfigureFootIKDiagnostics(float units,bool requestWrites,uint32_t groundMetadataId,
+    uintptr_t groundEntry,uintptr_t groundDescriptor);
 bool IsMotionMode();
 bool ArmMotionRig(const RigCalls& calls,uintptr_t root,uintptr_t renderer,uintptr_t animator,
     std::span<const MotionRigBone> bones,uintptr_t activeEntry,uintptr_t activeDescriptor);
