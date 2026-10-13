@@ -69,12 +69,12 @@ struct Leg {
     float soleOffset=0,groundY0=0;
     Quaternion firstFoot{0,0,0,1};
     float upper=0,lower=0,maxResidual=0,lastUpper=0,lastLower=0,lastResidual=0;
-    unsigned ticks=0,enabledTicks=0,clamped=0,failureStep=0,rejectedTicks=0;
+    unsigned ticks=0,enabledTicks=0,clamped=0,failureStep=0,rejectedTicks=0,lastRejectStep=0;
     unsigned groundQueries=0;
     // These fields describe the safe target pipeline even while the actual
     // writer is gated. They are POD state copied into the session report.
     bool chainReady=false,targetReady=false,poleReady=false,groundReady=false;
-    bool groundClamped=false;
+    bool groundClamped=false,poleFromVmdPose=false;
     Vector3 targetFrame0{},targetFrame30{},targetFrame120{};
     Vector3 groundFrame0{},groundFrame30{},groundFrame120{};
     bool toggleFrame0=true,toggleFrame30=true,toggleFrame120=true,lastToggleState=true;
@@ -922,6 +922,7 @@ bool PrepareIK() {
     const bool writer=FootIKWritePathEnabled();
     if(writer)footIKBlocker="LEG_TARGET_OR_CHAIN_REJECTED";
     for (auto& leg:playback.legs) if (leg.track>=0) {
+        leg.failureStep=leg.rejectedTicks=leg.lastRejectStep=0;
         leg.targetReady=false;leg.poleReady=false;leg.groundReady=false;leg.groundClamped=false;
         leg.groundY0=0;leg.soleOffset=0;
         leg.lastGoal={};leg.lastGround={};leg.groundQueries=0;
@@ -953,14 +954,13 @@ bool PrepareIK() {
         if (restUpper<0.0001f||restLower<0.0001f) {if(writer)return false;continue;}
         const auto scale=leg.upper/restUpper;
         if (std::fabs(leg.lower/restLower-scale)>scale*0.01f) {if(writer)return false;continue;}
-        // The live chain can already be bent by the native animator or by a
-        // previous solver pass.  Using it as the pole would therefore permit
-        // the bend side to flip (the visible symptom is a knee projecting
-        // backwards).  The Avatar bind pose is the stable model-space
-        // reference; rotate that reference into the captured actor world.
+        // The live pole is selected per frame after VMD FK has been applied.
+        // A bind-pose pole is deliberately not used as a fallback: it can point
+        // sideways or behind this avatar's actual dance pose.
         Vector3 modelPole{};
         leg.poleReady=ik::PoleDirection(restHip,restKnee,restFoot,modelPole);
         if (leg.poleReady) leg.pole=ik::Unit(ik::Rotate(playback.actorRootWorldRestoreRotation,modelPole));
+        leg.poleFromVmdPose=false;
         if (!leg.poleReady) {if(writer)return false;continue;}
         // VMD IK positions are model-space targets, not offsets from the
         // game's bind foot. Retarget motion relative to frame 0 so the
@@ -1014,6 +1014,7 @@ bool SolveIK(double frame,float blend) {
     if (!WorldRotation(playback.root,rotation)) return false;
     for (unsigned side=0;side<2;++side) {
         auto& leg=playback.legs[side];
+        const auto reject=[&](unsigned step) { ++leg.rejectedTicks;leg.lastRejectStep=step;leg.failureStep=0; };
         if (leg.track<0) continue;
         if (!leg.chainReady||!leg.targetReady||!leg.poleReady) return false;
         if (!IkToggle(leg,frame)) continue;
@@ -1021,7 +1022,7 @@ bool SolveIK(double frame,float blend) {
         Vector3 delta{};
         const auto target=vmd::SamplePosition(clip.tracks[leg.track],frame);
         const auto parent=leg.parentTrack>=0?vmd::SamplePosition(clip.tracks[leg.parentTrack],frame):Vector3{};
-        if (!ik::ModelTarget(target,parent,delta)) return false;
+        if (!ik::ModelTarget(target,parent,delta)) { reject(30);continue; }
         delta=ik::Sub(delta,leg.initialTarget);
         // All positional terms are relative to frame 0. The actual opening
         // ankle world point is the anchor; the Bip001 native baseline is not
@@ -1030,8 +1031,8 @@ bool SolveIK(double frame,float blend) {
         auto goal=ik::Goal(leg.anchor,rotation,rootDelta,delta,ikUnits*blend);
         float groundY=0;bool groundClamped=false;
         leg.failureStep=31;
-        if(!GroundHeight(goal,groundY)){footIKBlocker="GROUND_QUERY_RUNTIME_FAILED";return false;}
-        if(!ik::GroundCandidate(goal,groundY,leg.soleOffset,goal,groundClamped)){footIKBlocker="GROUND_CANDIDATE_INVALID";return false;}
+        if(!GroundHeight(goal,groundY)){reject(31);footIKBlocker="GROUND_QUERY_FRAME_SKIPPED";continue;}
+        if(!ik::GroundCandidate(goal,groundY,leg.soleOffset,goal,groundClamped)){reject(32);footIKBlocker="GROUND_CANDIDATE_FRAME_SKIPPED";continue;}
         leg.lastGoal=goal;leg.lastGround={goal.x,groundY,goal.z};++leg.groundQueries;
         leg.groundClamped=leg.groundClamped||groundClamped;
         Vector3 hip{},knee{},foot{};Quaternion thigh{},calf{};
@@ -1039,11 +1040,16 @@ bool SolveIK(double frame,float blend) {
         if (!Position(leg.thigh,hip)||!Position(leg.calf,knee)||!Position(leg.foot,foot)||!WorldRotation(leg.thigh,thigh)) return false;
         const auto actualUpper=ik::Length(ik::Sub(knee,hip)),actualLower=ik::Length(ik::Sub(foot,knee));
         leg.lastUpper=actualUpper;leg.lastLower=actualLower;leg.failureStep=2;
-        // 长度变化表示 scale / hierarchy 的假设失效；不能继续沿用启动时的腿几何。
-        if (std::fabs(actualUpper-leg.upper)>leg.upper*0.01f||std::fabs(actualLower-leg.lower)>leg.lower*0.01f) return false;
+        // Parent animation and avatar transforms can change the measured world
+        // lengths slightly. Solve with this frame's chain instead of turning a
+        // one-percent calibration drift into a playback-wide fault.
+        if (!std::isfinite(actualUpper)||!std::isfinite(actualLower)||actualUpper<0.0001f||actualLower<0.0001f||actualUpper>100||actualLower>100) { reject(2);continue; }
+        Vector3 posePole{};
+        if (!ik::PoleDirection(hip,knee,foot,posePole)) { reject(33);continue; }
+        leg.pole=posePole;leg.poleFromVmdPose=true;
         ik::Solution solution;
         leg.failureStep=3;
-        if (!ik::Solve(hip,goal,leg.pole,leg.upper,leg.lower,solution)) return false;
+        if (!ik::Solve(hip,goal,leg.pole,actualUpper,actualLower,solution)) { reject(3);continue; }
         leg.failureStep=4;
     if (!IKSet(leg.thigh,vmd::Multiply(ik::FromTo(ik::Sub(knee,hip),ik::Sub(solution.knee,hip)),thigh))) return false;
         leg.failureStep=5;
@@ -1053,14 +1059,12 @@ bool SolveIK(double frame,float blend) {
         const auto residual=ik::Length(ik::Sub(foot,solution.ankle));
         leg.lastResidual=residual;leg.failureStep=7;
         // Transform setters are quantized by Unity and the native animation
-        // pass may run between the two writes.  A small residual is therefore
-        // a recoverable frame miss, not a session/identity fault.  Keep the
-        // already-written pose, record it, and continue the other leg/frame;
-        // larger residuals remain visible in diagnostics and are skipped too
-        // rather than tearing down an otherwise valid dance session.
-        if (!std::isfinite(residual)) return false;
-        if (residual>(leg.upper+leg.lower)*0.01f) { ++leg.rejectedTicks; continue; }
-        leg.maxResidual=std::max(leg.maxResidual,residual);leg.clamped+=solution.clamped; ++leg.ticks;
+        // pass may run between writes. A finite residual miss skips this side
+        // for the frame; it must not stop the independent FK/root-motion path.
+        if (!std::isfinite(residual)) { reject(7);continue; }
+        leg.maxResidual=std::max(leg.maxResidual,residual);
+        if (residual>(actualUpper+actualLower)*0.01f) { reject(7);continue; }
+        leg.clamped+=solution.clamped; ++leg.ticks;
         const auto footInput=basis::ModelInput(vmd::Sample(clip.tracks[leg.track],frame));
         const auto footWorld=vmd::Multiply(rotation,vmd::Slerp(leg.firstFoot,vmd::Multiply(footInput,leg.firstFoot),blend));
         leg.failureStep=8;
@@ -1947,9 +1951,9 @@ void ReportMotion(std::ostream& report) {
         const auto& leg=playback.legs[side];
         report << "[FOOT_IK] side=" << side << " track=" << leg.track << " upper=" << leg.upper << " lower=" << leg.lower << " ticks=" << leg.ticks
             << " clamped=" << leg.clamped << " enabled_ticks=" << leg.enabledTicks << " toggle_track=" << leg.toggleTrack << " max_residual=" << leg.maxResidual << " units=" << ikUnits << " IK_quaternion_writes=" << playback.ikWrites
-            << " rejected_ticks=" << leg.rejectedTicks << " failure_step=" << leg.failureStep << " last_upper=" << leg.lastUpper << " last_lower=" << leg.lastLower << " last_residual=" << leg.lastResidual
+            << " rejected_ticks=" << leg.rejectedTicks << " last_reject_step=" << leg.lastRejectStep << " failure_step=" << leg.failureStep << " last_upper=" << leg.lastUpper << " last_lower=" << leg.lastLower << " last_residual=" << leg.lastResidual
             << " chain_ready=" << leg.chainReady << " target_ready=" << leg.targetReady << " pole_ready=" << leg.poleReady
-            << " pole_world=" << leg.pole.x << ',' << leg.pole.y << ',' << leg.pole.z
+            << " pole_world=" << leg.pole.x << ',' << leg.pole.y << ',' << leg.pole.z << " pole_source=" << (leg.poleFromVmdPose?"VMD_PRE_IK":"BIND_REFERENCE_NOT_SAMPLED")
             << " ground_candidate_ready=" << leg.groundReady << " ground_clamped=" << leg.groundClamped
             << " target_f0=" << leg.targetFrame0.x << ',' << leg.targetFrame0.y << ',' << leg.targetFrame0.z
             << " target_f30=" << leg.targetFrame30.x << ',' << leg.targetFrame30.y << ',' << leg.targetFrame30.z
