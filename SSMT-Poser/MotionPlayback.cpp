@@ -1,5 +1,6 @@
 #include "MotionPlayback.h"
 #include "LiveUnityProbe.h"
+#include "IKTimingProbe.h"
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -110,6 +111,7 @@ struct Playback {
     unsigned frames=0,writes=0,restoredBones=0,fault=0,sampleCount=0;
     int root=-1,motionRoot=-1,left=-1,right=-1,head=-1;
     uint64_t startTick=0,nextSample=0,maxTickMicroseconds=0;
+    uint64_t ikGeneration=0;
     LARGE_INTEGER frequency{};
     DWORD mainThread=0;
     bool armed=false,captured=false,restore=false;
@@ -222,6 +224,7 @@ void ConfigureFootIKDiagnosticsImpl(float units) {
 }
 std::filesystem::path abOutput;
 std::atomic<unsigned> abStage{UINT_MAX};
+std::atomic<uint64_t> nextIkGeneration{0};
 uintptr_t activeEntry=0,activeDescriptor=0;
 NativeMethod meshGetter,bindGetter,avatarGetter,componentsGetter;
 uintptr_t referenceMeshClass=0;

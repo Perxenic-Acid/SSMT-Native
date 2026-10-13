@@ -288,6 +288,7 @@ struct Job {
     NativeMethod animatorLayerCount, animatorLayerEnable;
     NativeMethod animatorIkGetPosition;
     NativeMethod fbikChainElementCount;
+    NativeMethod groundHeight;
     bool fbikMethodsReady = false;
     bool fbikChainElementMethodReady = false;
     bool animatorLayerMethodsReady = false;
@@ -309,6 +310,11 @@ struct Job {
     unsigned animatorIkPositionSampleCount = 0;
     DWORD animatorIkPositionReadFault = 0;
     std::array<Vector3, 4> animatorIkPositions{};
+    bool groundHeightReady = false, groundHeightRead = false;
+    std::array<float, 2> groundHeights{};
+    std::array<float, 2> footGroundDeltas{};
+    std::array<uint8_t, 2> groundHeightValid{};
+    DWORD groundHeightFault = 0;
     DWORD mainThread = 0, actualThread = 0, fault = 0;
     uintptr_t runtimeThread = 0;
     unsigned step = 0;
@@ -341,6 +347,7 @@ using IntGetter = int (*)(uintptr_t, uintptr_t);
 using IndexedIntGetter = int (*)(uintptr_t, int, uintptr_t);
 using IndexedBoolGetter = bool (*)(uintptr_t, int, uintptr_t);
 using Factory = uintptr_t (*)(uintptr_t);
+using GroundHeightGetter = float (*)(float, float, uintptr_t);
 using NewHandle = uint32_t (*)(uintptr_t, bool);
 using TargetHandle = uintptr_t (*)(uint32_t);
 using FreeHandle = void (*)(uint32_t);
@@ -461,6 +468,37 @@ bool ReadAnimatorIKPositions(uintptr_t animator) {
 DWORD ReadAnimatorIKPositionsGuarded(uintptr_t animator, bool& read) {
     __try {
         read = ReadAnimatorIKPositions(animator);
+        return 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        read = false;
+        return GetExceptionCode();
+    }
+}
+
+// Miscs.CalcCurrentGroundHeight(float worldX, float worldZ) is a static
+// two-argument wrapper on the current metadata profile.  Its failure value is
+// -1e8; reject that sentinel and never feed this read-only canary into a bone
+// setter.  The exact metadata id gate prevents calling a same-named method
+// with a different ABI after a game update.
+bool ReadFootGroundHeights() {
+    if (!job.groundHeightReady || !job.animatorIkPositionRead ||
+        job.animatorIkPositionSampleCount < 4) return false;
+    const auto getter = reinterpret_cast<GroundHeightGetter>(job.groundHeight.entry);
+    for (unsigned side = 0; side < 2; ++side) {
+        const auto& foot = job.animatorIkPositions[side + 2];
+        const auto value = getter(foot.x, foot.z, job.groundHeight.descriptor);
+        job.groundHeights[side] = value;
+        job.footGroundDeltas[side] = foot.y - value;
+        job.groundHeightValid[side] = std::isfinite(value) && value > -1.0e7f &&
+            std::isfinite(job.footGroundDeltas[side]);
+    }
+    job.groundHeightRead = true;
+    return true;
+}
+
+DWORD ReadFootGroundHeightsGuarded(bool& read) {
+    __try {
+        read = ReadFootGroundHeights();
         return 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         read = false;
@@ -888,6 +926,8 @@ bool ExecuteGuarded() {
             job.animatorIkPositionReadFault = ReadAnimatorIKPositionsGuarded(
                 selectedAnimator, job.animatorIkPositionRead);
         }
+        if (job.groundHeightReady && job.animatorIkPositionRead)
+            job.groundHeightFault = ReadFootGroundHeightsGuarded(job.groundHeightRead);
         job.step = 8;
         job.complete = true;
         return true;
@@ -1406,6 +1446,17 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
              std::pair{"UnityEngine", "Physics"}, std::pair{"UnityEngine", "PhysicsScene"},
              std::pair{"UnityEngine", "Animator"}})
         ReportMethodCensus(runtime, type.first, type.second, report);
+    {
+        NativeClass miscs;
+        job.groundHeightReady = runtime.FindClass("MoleMole", "Miscs", miscs) &&
+            runtime.FindMethod(miscs, "CalcCurrentGroundHeight", 2, job.groundHeight) &&
+            job.groundHeight.metadataId == 702885 && job.groundHeight.parameterCount == 2 &&
+            job.groundHeight.entry && job.groundHeight.descriptor;
+        report << "[GROUND_HEIGHT_METHOD] name=CalcCurrentGroundHeight metadataId="
+            << job.groundHeight.metadataId << " parameters=" << unsigned(job.groundHeight.parameterCount)
+            << " status=" << (job.groundHeightReady ? "READONLY_ABI_GATED" : "REJECTED")
+            << " signature=float(float worldX,float worldZ) failure_sentinel=-100000000\n";
+    }
     if (!Method(runtime, "Animator", "get_isHuman", 0, job.human) ||
         !Method(runtime, "SkinnedMeshRenderer", "get_rootBone", 0, job.rootBone) ||
         !Method(runtime, "SkinnedMeshRenderer", "get_bones", 0, job.bones) ||
@@ -1589,6 +1640,8 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
         job.animatorLayerEnabled.fill(-1); job.animatorLayerReadCount = 0; job.animatorLayerReadFault = 0;
         job.animatorIkPositionRead = false; job.animatorIkPositionSampleCount = 0;
         job.animatorIkPositionReadFault = 0; job.animatorIkPositions.fill({});
+        job.groundHeightRead = false; job.groundHeights.fill(0.0f);
+        job.footGroundDeltas.fill(0.0f); job.groundHeightValid.fill(0); job.groundHeightFault = 0;
         if (WaitForSingleObject(stop, 0) == WAIT_OBJECT_0) return false;
         if (Read(job.context.mainThreadSlot, job.mainThread) && job.mainThread) {
             Window window{job.mainThread, nullptr};
@@ -1686,6 +1739,21 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
                             report << goal << "=(" << value.x << ',' << value.y << ',' << value.z << ')';
                         }
                         report << " call_mode=READONLY_MAIN_THREAD\n";
+                    }
+                    if (i == 2 && job.groundHeightReady) {
+                        report << "[GROUND_HEIGHT_READ] read=" << job.groundHeightRead
+                            << " fault=0x" << std::hex << job.groundHeightFault << std::dec
+                            << " source=AnimatorIKPosition goals=LeftFoot(2),RightFoot(3)"
+                            << " input_space=WORLD_XZ sentinel=-100000000 values=";
+                        for (unsigned side = 0; side < 2; ++side) {
+                            if (side) report << ';';
+                            const auto& foot = job.animatorIkPositions[side + 2];
+                            report << side << "=(x=" << foot.x << ",z=" << foot.z
+                                << ",ground_y=" << job.groundHeights[side]
+                                << ",foot_delta_y=" << job.footGroundDeltas[side]
+                                << ",valid=" << unsigned(job.groundHeightValid[side]) << ')';
+                        }
+                        report << " invocation=READONLY_MAIN_THREAD_CANARY\n";
                     }
                 }
                 report << "[GROUND_IK_HIERARCHY_SCAN] read=" << job.componentScanRead
