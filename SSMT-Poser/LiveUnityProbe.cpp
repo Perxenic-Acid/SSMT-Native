@@ -41,6 +41,69 @@ bool Pattern(uintptr_t address, size_t size, const char* signature) {
     if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(address), bytes.data(), size, &count) || count != size) return false;
     return native_detail::FindPattern(bytes, signature).size() == 1;
 }
+bool Method(GenshinNativeRuntime& runtime, const char* owner, const char* name,
+    uint8_t parameters, NativeMethod& result);
+std::string CodeBytes(uintptr_t address, size_t size = 64) {
+    if (!address || size == 0) return {};
+    std::vector<uint8_t> bytes(size);
+    SIZE_T count = 0;
+    if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(address), bytes.data(), size, &count) ||
+        count != size) return {};
+    static constexpr char Digits[] = "0123456789abcdef";
+    std::string result;
+    result.reserve(size * 3 - 1);
+    for (size_t i = 0; i < bytes.size(); ++i) {
+        if (i) result.push_back(' ');
+        result.push_back(Digits[bytes[i] >> 4]);
+        result.push_back(Digits[bytes[i] & 0x0f]);
+    }
+    return result;
+}
+const char* Vector3AbiHint(const NativeMethod& method) {
+    if (!method.entry) return "UNRESOLVED";
+    // This is evidence only. The call gate remains disabled until a live
+    // canary proves both the hidden return buffer and the argument order.
+    if (Pattern(method.entry, 3, "48 89 CE")) return "SRET_PREFIX_48_89_CE";
+    if (Pattern(method.entry, 3, "48 89 C8")) return "SRET_PREFIX_48_89_C8";
+    if (Pattern(method.entry, 4, "48 83 EC 28")) return "STACK_WRAPPER_PREFIX";
+    return "PREFIX_UNCLASSIFIED";
+}
+void ReportAnimatorIKVariant(GenshinNativeRuntime& runtime, const char* name,
+    uint8_t parameters, std::ostream& report) {
+    NativeMethod method;
+    const bool resolved = Method(runtime, "Animator", name, parameters, method);
+    report << "[ANIMATOR_IK_VARIANT] method=" << name
+        << " parameters=" << unsigned(parameters)
+        << " resolved=" << (resolved ? 1 : 0);
+    if (resolved) {
+        report << " id=" << method.metadataId << " entry=0x" << std::hex << method.entry
+            << " target=0x" << method.target << " descriptor=0x" << method.descriptor
+            << std::dec << " entry_hint=" << Vector3AbiHint(method)
+            << " entry_bytes=\"" << CodeBytes(method.entry)
+            << "\" target_bytes=\"" << CodeBytes(method.target) << "\"";
+    }
+    // Variant descriptors are census evidence only. No candidate here is
+    // invoked until its ABI is independently validated with a canary.
+    report << " invocation=NONE\n";
+}
+void ReportAnimatorIKVariants(GenshinNativeRuntime& runtime, std::ostream& report) {
+    struct Candidate { const char* name; uint8_t parameters; };
+    constexpr Candidate candidates[] = {
+        {"GetIKPosition", 1}, {"GetIKPositionInternal", 1},
+        {"INTERNAL_CALL_GetIKPositionInternal", 3},
+        {"GetIKPositionNoThreadCheck", 1},
+        {"SetIKPosition", 2}, {"SetIKPositionInternal", 2},
+        {"INTERNAL_CALL_SetIKPositionInternal", 3},
+        {"SetIKPositionNoThreadCheck", 2},
+        {"GetIKRotation", 1}, {"GetIKRotationInternal", 1},
+        {"INTERNAL_CALL_GetIKRotationInternal", 3},
+        {"GetIKRotationNoThreadCheck", 1},
+    };
+    report << "[ANIMATOR_IK_VARIANTS] invocation=NONE candidates="
+        << (sizeof(candidates) / sizeof(candidates[0])) << '\n';
+    for (const auto& candidate : candidates)
+        ReportAnimatorIKVariant(runtime, candidate.name, candidate.parameters, report);
+}
 struct Bone {
     uintptr_t object = 0, klass = 0, native = 0;
     int nameLength = 0;
@@ -1321,6 +1384,10 @@ bool ProbeLiveUnity(GenshinNativeRuntime& runtime, HANDLE stop, std::ostream& re
         Method(runtime, "Animator", "GetIKPosition", 1, job.animatorIkGetPosition);
     if (job.animatorIkPositionMethodReady)
         job.animatorIkPositionAbiReady = ValidateAnimatorIKPositionWrapper(job.animatorIkGetPosition, report);
+    // Keep all public/internal/no-thread-check variants visible in one
+    // read-only census. This is needed because the generated Vector3 wrapper
+    // can use a different ABI from its Internal and NoThreadCheck callees.
+    ReportAnimatorIKVariants(runtime, report);
     report << "[FBIK_METHODS] available=" << job.fbikMethodsReady
         << " chain_element_count=" << job.fbikChainElementMethodReady
         << " position_rotation_calls=DEFERRED_ABI_VALIDATION"
