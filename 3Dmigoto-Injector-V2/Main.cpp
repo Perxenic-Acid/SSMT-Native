@@ -84,6 +84,16 @@ int wmain(
 		return EXIT_SUCCESS;
 	}
 	events.emit("launch_started");
+	// 在提权后的注入器内设置，仅由本次 CreateProcess 创建的游戏继承；
+	// 不依赖 ShellExecute 的跨提权环境继承，也不修改 SSMT 的进程环境。
+	for (const auto &[name, value] : options.environment)
+	{
+		if (!SetEnvironmentVariableW(name.c_str(), value ? value->c_str() : nullptr))
+		{
+			events.emit_error("configuration", "environment_failed", "Cannot configure launch environment");
+			return EXIT_FAILURE;
+		}
+	}
 
 	HANDLE instanceMutex = CreateMutexA(nullptr, FALSE, "Local\\3DMigotoLoader");
 	if (!instanceMutex)

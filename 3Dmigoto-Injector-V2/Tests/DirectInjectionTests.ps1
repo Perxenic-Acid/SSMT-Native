@@ -98,6 +98,26 @@ try {
         Write-Host "PASS $mode"
     }
 
+    # 热加载的环境必须由 Run.exe 创建的目标继承，不能依赖父进程或全局设置。
+    $directory = Join-Path $testRoot 'hot environment'
+    New-Item -ItemType Directory -Path $directory | Out-Null
+    $loader = Join-Path $directory 'Run.exe'
+    $target = Join-Path $directory 'Target.exe'
+    $runtime = Join-Path $directory 'version.dll'
+    $marker = Join-Path $directory 'environment.txt'
+    Copy-Item -LiteralPath $LoaderPath -Destination $loader
+    Copy-Item -LiteralPath $TargetPath -Destination $target
+    Copy-Item -LiteralPath $FixtureDllPath -Destination $runtime
+    $ini = @('[Loader]', "target = $target", 'module = version.dll', 'delay = 1', "launch = $target", "launch_args = `"$marker`" `"$runtime`"")
+    [IO.File]::WriteAllLines((Join-Path $directory 'd3dx.ini'), $ini, [Text.UTF8Encoding]::new($false))
+    $process = Start-Hidden $loader '--machine-readable --preload-runtime --set-env "SSMT_FIXTURE_ENV= hot value" --set-env SSMT_FIXTURE_ABSENT=remove --unset-env SSMT_FIXTURE_ABSENT' $directory 'loader'
+    $events = Wait-Loader $process $true $directory
+    Assert-True ((Get-Content -LiteralPath $marker -Raw) -eq 'injected hot value') '目标未继承指定环境'
+    Assert-True (-not $env:SSMT_FIXTURE_ENV) '环境泄漏到测试父进程'
+    $game = Get-Process -Id (($events | Where-Object event -eq 'target_created').pid) -ErrorAction SilentlyContinue
+    if ($game) { $children.Add($game); $game.Kill(); $game.WaitForExit() }
+    Write-Host 'PASS hot environment'
+
     $directory = Join-Path $testRoot 'failures'
     New-Item -ItemType Directory -Path $directory | Out-Null
     $loader = Join-Path $directory 'Run.exe'

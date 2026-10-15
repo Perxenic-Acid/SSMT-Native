@@ -4,6 +4,8 @@
 #include <optional>
 #include <stdexcept>
 #include <string_view>
+#include <vector>
+#include <utility>
 
 struct LoaderOptions
 {
@@ -14,6 +16,7 @@ struct LoaderOptions
     bool preload_runtime = false;
     bool direct_injection = false;
     bool wait_for_target = false;
+    std::vector<std::pair<std::wstring, std::optional<std::wstring>>> environment;
     unsigned long process_timeout_ms = 120000;
     std::optional<std::wstring> launch_barrier_id;
 };
@@ -28,6 +31,20 @@ inline LoaderOptions ParseLoaderOptions(
     {
         const std::wstring_view arg{
             argv[i]};
+
+        if (arg == L"--set-env" || arg == L"--unset-env")
+        {
+            if (i + 1 >= argc)
+                throw std::runtime_error("--set-env/--unset-env requires a name");
+            std::wstring value{argv[++i]};
+            const auto separator = value.find(L'=');
+            const auto name = arg == L"--set-env" ? value.substr(0, separator) : value;
+            if (name.empty() || name.find_first_not_of(L"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_") != std::wstring::npos ||
+                (arg == L"--set-env" && separator == std::wstring::npos))
+                throw std::runtime_error("Invalid environment name or assignment");
+            options.environment.emplace_back(name, arg == L"--set-env" ? std::optional<std::wstring>{value.substr(separator + 1)} : std::nullopt);
+            continue;
+        }
 
         if (arg == L"--plugin-host-config")
         {
@@ -110,5 +127,7 @@ inline LoaderOptions ParseLoaderOptions(
             "Unknown command-line argument");
     }
 
+    if (!options.environment.empty() && options.direct_injection)
+        throw std::runtime_error("Environment requires a newly launched target");
     return options;
 }

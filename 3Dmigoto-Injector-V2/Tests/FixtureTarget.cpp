@@ -6,6 +6,8 @@ int wmain(int argc, wchar_t *argv[])
 {
     if (argc < 3)
         return 2;
+    if (GetEnvironmentVariableW(L"SSMT_FIXTURE_ABSENT", nullptr, 0) != 0)
+        return 4;
     wchar_t systemDirectory[MAX_PATH]{};
     GetSystemDirectoryW(systemDirectory, MAX_PATH);
     // 预先加载同名系统 DLL，注入器必须识别测试目录中的另一份 DLL。
@@ -18,7 +20,9 @@ int wmain(int argc, wchar_t *argv[])
             ready = ready && GetModuleHandleW(argv[index]) != nullptr;
         if (ready)
         {
-            std::ofstream(std::filesystem::path(argv[1])) << "injected";
+            wchar_t environment[2048]{};
+            GetEnvironmentVariableW(L"SSMT_FIXTURE_ENV", environment, 2048);
+            std::wofstream(std::filesystem::path(argv[1])) << L"injected" << environment;
             Sleep(5000);
             return 0;
         }
