@@ -25,6 +25,7 @@ bool InstallAnimationReturnProbe(GenshinNativeRuntime& runtime,HANDLE stop,std::
 void EnableAnimationReturnWrites(bool enabled);
 bool AnimationReturnWritesConfirmed();
 bool RemoveAnimationReturnProbe(std::ostream& report);
+bool AnimationReturnHookReleased(); // worker 退出后查询，保护共享 MinHook 的 trampoline 生命周期。
 void ReportAnimationReturnProbe(std::ostream& report);
 // 调用方必须在已核验主线程持有强 root；共用已经验证的 Quaternion callee。
 bool ReadBoneRotation(uintptr_t object,uintptr_t expectedNative,Quaternion& out);

@@ -417,8 +417,8 @@ bool InstallAnimationReturnProbe(GenshinNativeRuntime& runtime,HANDLE stop,std::
     if (!animationBatch || !test.armed || hookCreated || !Read(calls.context.mainThreadSlot,unityThread) || !unityThread) return false;
     batchCalls=0; lateWrites=0; lateFault=0; offMain=0; lateSampleCount=0; lateEnabled=false;
     const auto init=MH_Initialize();
-    if (init!=MH_OK) { report << "animation_hook_initialize=" << MH_StatusToString(init) << '\n'; return false; }
-    hookInitialized=true;
+    if (init!=MH_OK&&init!=MH_ERROR_ALREADY_INITIALIZED) { report << "animation_hook_initialize=" << MH_StatusToString(init) << '\n'; return false; }
+    hookInitialized=init==MH_OK;
     auto status=MH_CreateHook(reinterpret_cast<void*>(animationBatch),reinterpret_cast<void*>(&AnimationReturn),reinterpret_cast<void**>(&originalBatch));
     if (status==MH_OK) { hookCreated=true; status=MH_EnableHook(reinterpret_cast<void*>(animationBatch)); }
     report << "animation_hook_install=" << MH_StatusToString(status) << '\n'; report.flush();
@@ -430,6 +430,7 @@ void EnableAnimationReturnWrites(bool enabled) {
     lateEnabled=enabled;
 }
 bool AnimationReturnWritesConfirmed() { return lateWrites.load()>0 && lateFault.load()==0; }
+bool AnimationReturnHookReleased() {return !hookCreated&&!batchInFlight.load();}
 bool RemoveAnimationReturnProbe(std::ostream& report) {
     lateEnabled=false;
     bool passed=true;

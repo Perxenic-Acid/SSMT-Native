@@ -34,6 +34,10 @@ bool InitializeMotionReference(GenshinNativeRuntime& runtime,uintptr_t meshClass
 // worker 操作，调用前必须完成主线程停止/恢复派发；下一次开始派发发布给主线程。
 bool LoadMotionClip(const std::filesystem::path& path,std::ostream& report,HANDLE stop=nullptr);
 bool UnloadMotionClip(); // worker，须先经过主线程停止与恢复。
+// 以下均在 worker 调用，要求已完成主线程停止派发；烘焙不访问 Unity 对象。
+bool InitializeMotionPhysics(std::ostream& report);
+bool ConfigureMotionPhysics(const std::wstring& settings,uint64_t generation,std::ostream& report);
+bool BakeMotionPhysics(const std::filesystem::path& cacheDirectory,uint64_t generation,HANDLE stop,std::ostream& report);
 // A/B 配置与切换仅允许在主线程已停止并恢复后，由 worker 调用。
 bool ConfigureMotionAB(const std::filesystem::path& directory,std::ostream& report);
 bool SelectMotionAB(unsigned command,std::ostream& report); // 6=Legacy，7=Basis，8=下个测试姿态。

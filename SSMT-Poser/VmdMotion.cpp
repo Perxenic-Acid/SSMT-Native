@@ -110,6 +110,14 @@ Vector3 SamplePosition(const Track& track,double frame) {
     for (unsigned axis=0;axis<3;++axis) values[axis]=before->position[axis]+(after->position[axis]-before->position[axis])*Bezier(after->interpolation,axis,fraction);
     return {values[0],values[1],values[2]};
 }
+float SampleMorph(const MorphTrack& track,double frame) {
+    if(track.keys.empty()||!std::isfinite(frame))return 0;
+    if(frame<=track.keys.front().frame)return track.keys.front().weight;
+    if(frame>=track.keys.back().frame)return track.keys.back().weight;
+    const auto next=std::upper_bound(track.keys.begin(),track.keys.end(),frame,[](double value,const MorphKey& key){return value<key.frame;});
+    const auto& previous=*(next-1);
+    return previous.weight+(next->weight-previous.weight)*float((frame-previous.frame)/(next->frame-previous.frame));
+}
 bool Parse(std::span<const uint8_t> bytes,Clip& out,std::string& error,HANDLE stop) {
     out={}; error.clear();
     try {
@@ -150,7 +158,27 @@ bool Parse(std::span<const uint8_t> bytes,Clip& out,std::string& error,HANDLE st
             for (const auto& key:track.keys) { if (!unique.empty()&&unique.back().frame==key.frame) unique.back()=key; else unique.push_back(key); }
             track.keys=std::move(unique);
         }
-        clip.morphKeys=reader.SkipOptional(23);
+        clip.morphKeys=reader.Remaining()?reader.Count(23):0;
+        std::unordered_map<std::wstring,size_t> morphs;
+        for(uint32_t i=0;i<clip.morphKeys;++i) {
+            if (!(i%1024) && stop && WaitForSingleObject(stop,0)==WAIT_OBJECT_0) throw std::runtime_error("VMD_CANCELLED");
+            const auto name=reader.Text(15);const MorphKey key{reader.Value<uint32_t>(),reader.Value<float>()};
+            if(name.empty())throw std::runtime_error("VMD_MORPH_NAME_EMPTY");
+            if(key.frame>1080000)throw std::runtime_error("VMD_FRAME_LIMIT");
+            if(!std::isfinite(key.weight))throw std::runtime_error("VMD_MORPH_WEIGHT_NONFINITE");
+            auto found=morphs.find(name);
+            if(found==morphs.end()) {
+                if(clip.morphTracks.size()>=MaxTracks)throw std::runtime_error("VMD_MORPH_TRACK_LIMIT");
+                found=morphs.emplace(name,clip.morphTracks.size()).first;clip.morphTracks.push_back({name,{}});
+            }
+            clip.morphTracks[found->second].keys.push_back(key);clip.lastFrame=std::max(clip.lastFrame,key.frame);
+        }
+        for(auto& track:clip.morphTracks) {
+            std::stable_sort(track.keys.begin(),track.keys.end(),[](const MorphKey& a,const MorphKey& b){return a.frame<b.frame;});
+            std::vector<MorphKey> unique;unique.reserve(track.keys.size());
+            for(const auto& key:track.keys){if(!unique.empty()&&unique.back().frame==key.frame)unique.back()=key;else unique.push_back(key);}
+            track.keys=std::move(unique);
+        }
         clip.cameraKeys=reader.SkipOptional(61);
         clip.lightKeys=reader.SkipOptional(28);
         reader.SkipOptional(9); // self shadow。

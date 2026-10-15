@@ -695,13 +695,9 @@ bool InstallIKTimingProbe(GenshinNativeRuntime& runtime, DWORD mainThread,
         << "; motion_targets=EXTERNAL_SNAPSHOT; analytic_solver=NOT_USED\n";
     report.flush();
     if (failed || !created) {
-        for (auto& hook : hooks) if (hook.created) {
-            MH_DisableHook(reinterpret_cast<void*>(hook.address));
-            MH_RemoveHook(reinterpret_cast<void*>(hook.address));
-        }
-        if (ownsMinHook) MH_Uninitialize();
-        ResetDescriptors();
-        ResetWriter();
+        const bool removed=RemoveIKTimingProbe(report);
+        if (removed&&ownsMinHook) MH_Uninitialize();
+        if (removed) ResetDescriptors();
         return false;
     }
     installed.store(true, std::memory_order_release);
@@ -726,7 +722,7 @@ bool RemoveIKTimingProbe(std::ostream& report) {
         const auto status = MH_RemoveHook(reinterpret_cast<void*>(hook.address));
         passed = passed && status == MH_OK;
         report << "ik_timing_hook_remove method=" << hook.name << " status=" << MH_StatusToString(status) << '\n';
-        hook.created = false;
+        if(status==MH_OK)hook.created = false;
     }
     if (!passed && activeHooks) {
         HMODULE pinned = nullptr;
@@ -740,6 +736,7 @@ bool RemoveIKTimingProbe(std::ostream& report) {
 }
 
 bool IKTimingProbeInstalled() { return installed.load(std::memory_order_acquire); }
+bool IKTimingHooksReleased() {for(const auto& hook:hooks)if(hook.created)return false;return !inFlight.load();}
 
 bool PublishAnimatorIKTargets(const AnimatorIKTargetSnapshot& snapshot) {
     if (!IKTimingProbeInstalled() || GetCurrentThreadId() != unityThread || !snapshot.valid ||

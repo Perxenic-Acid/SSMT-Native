@@ -1,5 +1,6 @@
 #include "PoserUi.h"
 #include "UiBridge.h"
+#include "CursorInput.h"
 #include <commctrl.h>
 #include <shobjidl.h>
 #include <wrl/client.h>
@@ -20,11 +21,13 @@ std::atomic<bool> closing{false};
 HANDLE stopEvent=nullptr;
 bool previewMode=false;
 HWND game=nullptr,rigs=nullptr,path=nullptr,statusLabel=nullptr,actorLabel=nullptr,motionLabel=nullptr,progress=nullptr;
+HWND physicsMode=nullptr,physicsPreset=nullptr,physicsBones=nullptr,physicsLabel=nullptr;
+HWND facePath=nullptr,faceMode=nullptr,faceTracks=nullptr,faceTargets=nullptr,faceLabel=nullptr;
 HFONT normalFont=nullptr,titleFont=nullptr;
 HBRUSH background=nullptr,fieldBackground=nullptr;
 ui::Snapshot view;
 uint64_t shownRevision=UINT64_MAX,shownGeneration=UINT64_MAX;
-bool previousToggle=false,visible=true;
+bool previousToggle=false,visible=true,passThrough=false,inputRequested=false;
 bool browsing=false;
 IFileOpenDialog* picker=nullptr; // 仅 UI 线程使用，跨线程只投递窗口消息。
 int scale=100;
@@ -47,18 +50,53 @@ bool Send(ui::CommandKind kind,std::wstring text={},uint64_t generation=0) {
     if (!accepted) SetWindowTextW(statusLabel,L"命令队列繁忙，请稍后重试。");
     return accepted;
 }
-void GateControls(HWND window) {
-    EnableWindow(GetDlgItem(window,ui_control::Load),view.ready&&!view.playing);
-    EnableWindow(GetDlgItem(window,ui_control::Play),view.ready&&view.loaded&&!view.playing);
-    EnableWindow(GetDlgItem(window,ui_control::Stop),view.playing);
-    EnableWindow(GetDlgItem(window,ui_control::Unload),view.loaded&&!view.playing);
-    EnableWindow(GetDlgItem(window,ui_control::Release),!view.playing&&!view.actor.empty());
-    EnableWindow(GetDlgItem(window,ui_control::Bind),!view.playing&&!view.catalogStale);
-    EnableWindow(GetDlgItem(window,ui_control::Refresh),!view.playing);
-    EnableWindow(GetDlgItem(window,ui_control::Browse),!view.playing);
-    EnableWindow(path,!view.playing);
+void CursorPolicy(HWND window,bool foreground) {
+    if(inputRequested) {
+        cursor::Context(game,GetCurrentThreadId());
+        cursor::Capture(visible&&IsWindowVisible(window)&&game&&!IsIconic(game)&&foreground&&!passThrough,foreground);
+    }
 }
-void Browse(HWND window) {
+void SetPassThrough(HWND window,bool value) {
+    passThrough=value;
+    SetWindowTextW(GetDlgItem(window,ui_control::CursorPassThrough),value?L"光标穿透：开启":L"光标穿透：关闭");
+    auto style=GetWindowLongPtrW(window,GWL_EXSTYLE);
+    if(value) {
+        SetWindowLongPtrW(window,GWL_EXSTYLE,style|WS_EX_LAYERED|WS_EX_TRANSPARENT|WS_EX_NOACTIVATE);
+        SetLayeredWindowAttributes(window,0,255,LWA_ALPHA);
+    } else SetWindowLongPtrW(window,GWL_EXSTYLE,style&~(WS_EX_LAYERED|WS_EX_TRANSPARENT|WS_EX_NOACTIVATE));
+    DWORD foreground=0;GetWindowThreadProcessId(GetForegroundWindow(),&foreground);
+    CursorPolicy(window,foreground==GetCurrentProcessId());
+    if(value&&GetForegroundWindow()==window&&game)SetForegroundWindow(game);
+    RedrawWindow(window,nullptr,nullptr,RDW_INVALIDATE|RDW_ALLCHILDREN|RDW_FRAME);
+}
+void GateControls(HWND window) {
+    const auto idle=!view.playing&&!view.physics.baking;
+    EnableWindow(GetDlgItem(window,ui_control::Load),view.ready&&idle);
+    EnableWindow(GetDlgItem(window,ui_control::Play),view.ready&&view.loaded&&idle&&(view.physics.mode!=2||view.physics.bakedFrames));
+    EnableWindow(GetDlgItem(window,ui_control::Stop),view.playing||view.physics.baking);
+    EnableWindow(GetDlgItem(window,ui_control::Unload),view.loaded&&idle);
+    EnableWindow(GetDlgItem(window,ui_control::Release),idle&&!view.actor.empty());
+    EnableWindow(GetDlgItem(window,ui_control::Bind),idle&&!view.catalogStale);
+    EnableWindow(GetDlgItem(window,ui_control::Refresh),idle);
+    EnableWindow(GetDlgItem(window,ui_control::Browse),idle);
+    EnableWindow(path,idle);
+    EnableWindow(physicsMode,view.ready&&idle&&!view.physics.bones.empty());
+    EnableWindow(physicsPreset,view.ready&&idle&&view.physics.mode!=0);
+    EnableWindow(physicsBones,view.ready&&idle&&view.physics.mode!=0);
+    EnableWindow(GetDlgItem(window,ui_control::BakePhysics),view.ready&&view.loaded&&idle&&view.physics.mode==2&&view.physics.selected>0);
+    for(const auto id:{ui_control::FacePath,ui_control::FaceBrowse,ui_control::FaceLoad})EnableWindow(GetDlgItem(window,id),view.ready&&idle);
+    EnableWindow(faceMode,view.ready&&idle&&view.face.available);
+    EnableWindow(faceTracks,view.ready&&idle&&!view.face.tracks.empty());EnableWindow(faceTargets,view.ready&&idle&&view.face.available);
+    for(const auto id:{ui_control::FaceMap,ui_control::FaceUnmap})EnableWindow(GetDlgItem(window,id),view.ready&&idle&&view.face.available&&!view.face.tracks.empty());
+}
+void ConfigurePhysics() {
+    const auto mode=int(SendMessageW(physicsMode,CB_GETCURSEL,0,0)),preset=int(SendMessageW(physicsPreset,CB_GETCURSEL,0,0));
+    if(mode<0||preset<0)return;
+    std::wstring settings=std::to_wstring(mode)+L" "+std::to_wstring(preset);
+    for(size_t i=0;i<view.physics.bones.size();++i)if(SendMessageW(physicsBones,LB_GETSEL,i,0)>0)settings+=L" "+std::to_wstring(view.physics.bones[i].index);
+    Send(ui::CommandKind::ConfigurePhysics,std::move(settings),view.physics.generation);
+}
+void Browse(HWND window,HWND destination) {
     if (closing.load()) return;
     Microsoft::WRL::ComPtr<IFileOpenDialog> request;
     if (FAILED(CoCreateInstance(CLSID_FileOpenDialog,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&request)))) {
@@ -74,7 +112,7 @@ void Browse(HWND window) {
     if (SUCCEEDED(request->Show(window))) {
         Microsoft::WRL::ComPtr<IShellItem> selected;PWSTR name=nullptr;
         if (SUCCEEDED(request->GetResult(&selected))&&SUCCEEDED(selected->GetDisplayName(SIGDN_FILESYSPATH,&name))) {
-            SetWindowTextW(path,name);CoTaskMemFree(name);
+            SetWindowTextW(destination,name);CoTaskMemFree(name);
         }
     }
     picker=nullptr;browsing=false;
@@ -86,16 +124,23 @@ BOOL CALLBACK FindGame(HWND window,LPARAM) {
     return TRUE;
 }
 void Update(HWND window) {
-    if (!previewMode&&!game) {EnumWindows(FindGame,0);if (game) SetWindowLongPtrW(window,GWLP_HWNDPARENT,reinterpret_cast<LONG_PTR>(game));}
+    if(game&&!IsWindow(game))game=nullptr;
+    if (!previewMode&&!game) EnumWindows(FindGame,0);
     DWORD foreground=0;GetWindowThreadProcessId(GetForegroundWindow(),&foreground);
     const auto toggle=foreground==GetCurrentProcessId()&&(GetAsyncKeyState(VK_DECIMAL)&0x8000);
-    if (toggle&&!previousToggle) {visible=!visible;ShowWindow(window,visible?SW_SHOWNOACTIVATE:SW_HIDE);}
+    if (toggle&&!previousToggle) {
+        if(GetAsyncKeyState(VK_CONTROL)&0x8000)SetPassThrough(window,!passThrough);
+        else {visible=!visible;ShowWindow(window,visible?SW_SHOWNOACTIVATE:SW_HIDE);}
+        if(visible&&!passThrough&&game)SetForegroundWindow(window);
+        else if(!visible&&GetForegroundWindow()==window&&game)SetForegroundWindow(game);
+    }
     previousToggle=toggle;
     if (!previewMode&&game) {
         const auto show=visible&&!IsIconic(game)&&foreground==GetCurrentProcessId();
         ShowWindow(window,show?SW_SHOWNOACTIVATE:SW_HIDE);
         if (show) SetWindowPos(window,HWND_TOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
     }
+    CursorPolicy(window,foreground==GetCurrentProcessId());
     auto next=ui::Read();if (next.revision==shownRevision) return;
     const auto priorSelection=int(SendMessageW(rigs,LB_GETCURSEL,0,0));
     const auto selected=priorSelection>=0&&size_t(priorSelection)<view.rigs.size()?view.rigs[priorSelection].name:L"";
@@ -110,6 +155,29 @@ void Update(HWND window) {
         shownGeneration=next.generation;
     }
     if (next.path!=view.path&&!next.path.empty()) SetWindowTextW(path,next.path.c_str());
+    if(next.face.path!=view.face.path)SetWindowTextW(facePath,next.face.path.c_str());
+    if(next.face.generation!=view.face.generation) {
+        const auto priorTrack=SendMessageW(faceTracks,CB_GETCURSEL,0,0),priorTarget=SendMessageW(faceTargets,LB_GETCURSEL,0,0);
+        SendMessageW(faceTracks,CB_RESETCONTENT,0,0);SendMessageW(faceTargets,LB_RESETCONTENT,0,0);
+        for(const auto& name:next.face.tracks)SendMessageW(faceTracks,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(name.c_str()));
+        for(const auto& name:next.face.targets)SendMessageW(faceTargets,LB_ADDSTRING,0,reinterpret_cast<LPARAM>(name.c_str()));
+        if(!next.face.tracks.empty())SendMessageW(faceTracks,CB_SETCURSEL,priorTrack>=0&&size_t(priorTrack)<next.face.tracks.size()?priorTrack:0,0);
+        if(!next.face.targets.empty())SendMessageW(faceTargets,LB_SETCURSEL,priorTarget>=0&&size_t(priorTarget)<next.face.targets.size()?priorTarget:0,0);
+        SendMessageW(faceTargets,LB_SETHORIZONTALEXTENT,S(900),0);
+    }
+    SendMessageW(faceMode,CB_SETCURSEL,next.face.mode,0);SetWindowTextW(faceLabel,next.face.message.c_str());
+    if(next.physics.generation!=view.physics.generation) {
+        SendMessageW(physicsBones,LB_RESETCONTENT,0,0);
+        const auto dc=GetDC(physicsBones);const auto priorFont=SelectObject(dc,normalFont);int extent=0;
+        for(size_t i=0;i<next.physics.bones.size();++i) {
+            const auto& bone=next.physics.bones[i];SendMessageW(physicsBones,LB_ADDSTRING,0,reinterpret_cast<LPARAM>(bone.label.c_str()));
+            SendMessageW(physicsBones,LB_SETSEL,bone.selected,i);
+            SIZE size{};if(GetTextExtentPoint32W(dc,bone.label.c_str(),int(bone.label.size()),&size))extent=std::max(extent,int(size.cx)+S(8));
+        }
+        SelectObject(dc,priorFont);ReleaseDC(physicsBones,dc);SendMessageW(physicsBones,LB_SETHORIZONTALEXTENT,extent,0);
+    } else for(size_t i=0;i<next.physics.bones.size()&&i<view.physics.bones.size();++i)
+        if(next.physics.bones[i].selected!=view.physics.bones[i].selected)SendMessageW(physicsBones,LB_SETSEL,next.physics.bones[i].selected,i);
+    SendMessageW(physicsMode,CB_SETCURSEL,next.physics.mode,0);SendMessageW(physicsPreset,CB_SETCURSEL,next.physics.preset,0);
     view=std::move(next);shownRevision=view.revision;
     const auto status=view.catalogStale?L"场景切换中；列表保留上次有效扫描，当前不可绑定。":view.message;
     SetWindowTextW(statusLabel,status.c_str());
@@ -117,6 +185,8 @@ void Update(HWND window) {
     SetWindowTextW(actorLabel,actor.c_str());
     const auto motion=view.loaded?L"已载入   ·   "+std::to_wstring(view.tracks)+L" 轨道   ·   "+std::to_wstring(int(view.seconds))+L" 秒":L"未载入动作";
     SetWindowTextW(motionLabel,motion.c_str());
+    const auto physicsText=view.physics.baking?L"物理预烘焙："+std::to_wstring(view.physics.progress)+L"% · 停止可取消":view.physics.message;
+    SetWindowTextW(physicsLabel,physicsText.c_str());
     SendMessageW(progress,PBM_SETPOS,view.seconds>0?WPARAM(view.position/view.seconds*1000):0,0);
     GateControls(window);
 }
@@ -124,6 +194,9 @@ LRESULT CALLBACK Procedure(HWND window,UINT message,WPARAM wParam,LPARAM lParam)
     if (message==WM_CREATE) {
         Label(window,L"SSMT  Poser",22,18,490,30,true);
         Label(window,L"骨架与动作控制",22,55,490,22);
+        Control(window,L"BUTTON",L"光标穿透：关闭",ui_control::CursorPassThrough,BS_PUSHBUTTON,580,18,208,32);
+        Label(window,L"Ctrl + 小键盘 . 切换穿透",580,55,444,22);
+        if(inputRequested&&!cursor::Available())Label(window,L"光标接管失败，请查看日志。",802,22,222,24);
         Label(window,L"场景中的骨架",22,98,380,22);
         Control(window,L"BUTTON",L"刷新",ui_control::Refresh,BS_PUSHBUTTON,450,92,86,30);
         rigs=Control(window,L"LISTBOX",L"",ui_control::Rigs,LBS_NOTIFY|WS_VSCROLL|WS_BORDER|WS_TABSTOP,22,130,514,154);
@@ -140,9 +213,31 @@ LRESULT CALLBACK Procedure(HWND window,UINT message,WPARAM wParam,LPARAM lParam)
         Control(window,L"BUTTON",L"停止并恢复",ui_control::Stop,BS_PUSHBUTTON,418,468,118,32);
         motionLabel=Control(window,L"STATIC",L"未载入动作",0,SS_LEFT,22,517,514,24);
         progress=Control(window,PROGRESS_CLASSW,L"",0,0,22,549,514,6);SendMessageW(progress,PBM_SETRANGE32,0,1000);
-        statusLabel=Control(window,L"STATIC",L"等待进入角色场景。",0,SS_LEFT,22,578,514,36);
-        Label(window,L"NumLock 开启：小键盘 1 播放 · 2 停止 · . 显示 / 隐藏",22,623,514,24);
-        Label(window,L"当前为动作预览。物理与完整姿态隔离仍在开发。",22,651,514,24);
+        Label(window,L"次级骨物理",22,572,170,22);
+        physicsMode=Control(window,L"COMBOBOX",L"",ui_control::PhysicsMode,CBS_DROPDOWNLIST|WS_VSCROLL|WS_TABSTOP,22,601,194,150);
+        for(const auto text:{L"保留游戏物理",L"实时物理",L"物理预烘焙"})SendMessageW(physicsMode,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(text));
+        physicsPreset=Control(window,L"COMBOBOX",L"",ui_control::PhysicsPreset,CBS_DROPDOWNLIST|WS_VSCROLL|WS_TABSTOP,230,601,174,150);
+        for(const auto text:{L"柔和",L"标准",L"偏硬"})SendMessageW(physicsPreset,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(text));
+        Control(window,L"BUTTON",L"生成 / 读取",ui_control::BakePhysics,BS_PUSHBUTTON,418,600,118,30);
+        physicsBones=Control(window,L"LISTBOX",L"",ui_control::PhysicsBones,LBS_MULTIPLESEL|WS_VSCROLL|WS_HSCROLL|WS_BORDER|WS_TABSTOP|LBS_NOTIFY,22,643,260,102);
+        physicsLabel=Control(window,L"STATIC",L"绑定骨架后识别物理候选骨。",0,SS_LEFT,296,644,240,96);
+        statusLabel=Control(window,L"STATIC",L"等待进入角色场景。",0,SS_LEFT,22,761,514,38);
+        Label(window,L"NumLock 开启：小键盘 1 播放 · 2 停止 · . 显示 / 隐藏",22,812,514,24);
+        Label(window,L"物理随动作播放；候选骨可逐项选择，停止后交还游戏。",22,840,514,24);
+        Label(window,L"面部表情",580,98,444,22);
+        facePath=Control(window,L"EDIT",L"",ui_control::FacePath,ES_AUTOHSCROLL|WS_TABSTOP,580,130,344,30);SendMessageW(facePath,EM_SETLIMITTEXT,32767,0);
+        Control(window,L"BUTTON",L"选择…",ui_control::FaceBrowse,BS_PUSHBUTTON,936,129,88,32);
+        Control(window,L"BUTTON",L"载入表情",ui_control::FaceLoad,BS_PUSHBUTTON,580,174,142,32);
+        faceMode=Control(window,L"COMBOBOX",L"",ui_control::FaceMode,CBS_DROPDOWNLIST|WS_TABSTOP,736,174,288,120);
+        for(const auto text:{L"保留游戏原有表情",L"覆盖已映射形态键",L"替换表情：其余形态键归零"})SendMessageW(faceMode,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(text));
+        Label(window,L"VMD 源形态键",580,224,444,22);
+        faceTracks=Control(window,L"COMBOBOX",L"",ui_control::FaceTracks,CBS_DROPDOWNLIST|WS_VSCROLL|WS_TABSTOP,580,254,444,240);
+        Label(window,L"当前角色形态键（同一源可映射多个目标）",580,300,444,22);
+        faceTargets=Control(window,L"LISTBOX",L"",ui_control::FaceTargets,LBS_NOTIFY|WS_VSCROLL|WS_HSCROLL|WS_BORDER|WS_TABSTOP,580,332,444,350);
+        Control(window,L"BUTTON",L"映射到所选目标",ui_control::FaceMap,BS_PUSHBUTTON,580,700,208,32);
+        Control(window,L"BUTTON",L"取消目标映射",ui_control::FaceUnmap,BS_PUSHBUTTON,802,700,222,32);
+        faceLabel=Control(window,L"STATIC",L"绑定骨架后读取当前角色形态键。",0,SS_LEFT,580,755,444,60);
+        Label(window,L"表情与动作同步；停止时恢复游戏表情。",580,840,444,24);
         DragAcceptFiles(window,TRUE);SetTimer(window,1,100,nullptr);Update(window);return 0;
     }
     if (message==WM_TIMER) {
@@ -157,19 +252,32 @@ LRESULT CALLBACK Procedure(HWND window,UINT message,WPARAM wParam,LPARAM lParam)
     if (message==WM_COMMAND) {
         if (const auto control=GetDlgItem(window,LOWORD(wParam));control&&!IsWindowEnabled(control)) return 0;
         switch (LOWORD(wParam)) {
+        case ui_control::CursorPassThrough:SetPassThrough(window,!passThrough);break;
         case ui_control::Refresh:Send(ui::CommandKind::Refresh);break;
         case ui_control::Bind:{const auto selected=int(SendMessageW(rigs,LB_GETCURSEL,0,0));if (selected>=0&&size_t(selected)<view.rigs.size()&&view.rigs[selected].selectable) Send(ui::CommandKind::BindActor,view.rigs[selected].name,view.generation);else SetWindowTextW(statusLabel,L"请选择当前激活、可绑定的角色骨架。");break;}
-        case ui_control::Browse:Browse(window);break;
+        case ui_control::Browse:Browse(window,path);break;
+        case ui_control::FaceBrowse:Browse(window,facePath);break;
+        case ui_control::FaceLoad:Send(ui::CommandKind::LoadFace,Text(facePath));break;
+        case ui_control::FaceMode:if(HIWORD(wParam)==CBN_SELCHANGE)Send(ui::CommandKind::ConfigureFace,std::to_wstring(SendMessageW(faceMode,CB_GETCURSEL,0,0)),view.face.generation);break;
+        case ui_control::FaceMap:case ui_control::FaceUnmap: {
+            const auto track=LOWORD(wParam)==ui_control::FaceUnmap?-1:int(SendMessageW(faceTracks,CB_GETCURSEL,0,0));
+            const auto target=int(SendMessageW(faceTargets,LB_GETCURSEL,0,0));
+            if(track>=-1&&target>=0)Send(ui::CommandKind::MapFace,std::to_wstring(track)+L" "+std::to_wstring(target),view.face.generation);break;
+        }
         case ui_control::Load:Send(ui::CommandKind::LoadFile,Text(path));break;
         case ui_control::Unload:Send(ui::CommandKind::Unload);break;
         case ui_control::Play:if (Send(ui::CommandKind::Play)) {view.playing=true;GateControls(window);SetWindowTextW(statusLabel,L"正在请求播放，可点击停止取消。");}break;
         case ui_control::Stop:Send(ui::CommandKind::Stop);break;
         case ui_control::Release:Send(ui::CommandKind::ReleaseRig);break;
+        case ui_control::PhysicsMode:case ui_control::PhysicsPreset:if(HIWORD(wParam)==CBN_SELCHANGE)ConfigurePhysics();break;
+        case ui_control::PhysicsBones:if(HIWORD(wParam)==LBN_SELCHANGE)ConfigurePhysics();break;
+        case ui_control::BakePhysics:if(Send(ui::CommandKind::BakePhysics,{},view.physics.generation)){view.physics.baking=true;GateControls(window);SetWindowTextW(physicsLabel,L"正在请求物理预烘焙…");}break;
         default:break;
         }return 0;
     }
-    if (message==WM_DROPFILES) {const auto drop=reinterpret_cast<HDROP>(wParam);wchar_t selected[32768]{};if (!view.playing&&DragQueryFileW(drop,0,selected,DWORD(std::size(selected)))) SetWindowTextW(path,selected);DragFinish(drop);return 0;}
-    if (message==WM_CLOSE) {visible=false;ShowWindow(window,SW_HIDE);return 0;}
+    if (message==WM_DROPFILES) {const auto drop=reinterpret_cast<HDROP>(wParam);wchar_t selected[32768]{};if (!view.playing&&!view.physics.baking&&DragQueryFileW(drop,0,selected,DWORD(std::size(selected)))) SetWindowTextW(path,selected);DragFinish(drop);return 0;}
+    if (message==WM_CLOSE) {visible=false;ShowWindow(window,SW_HIDE);DWORD foreground=0;GetWindowThreadProcessId(GetForegroundWindow(),&foreground);CursorPolicy(window,foreground==GetCurrentProcessId());if(GetForegroundWindow()==window&&game)SetForegroundWindow(game);return 0;}
+    if (message==WM_ACTIVATEAPP&&!wParam&&inputRequested)cursor::Capture(false,false);
     if (message==WM_CTLCOLORSTATIC||message==WM_CTLCOLORLISTBOX||message==WM_CTLCOLOREDIT) {
         const auto dc=reinterpret_cast<HDC>(wParam);const bool field=message!=WM_CTLCOLORSTATIC;
         SetTextColor(dc,RGB(231,237,245));SetBkColor(dc,field?RGB(31,40,54):RGB(19,27,39));return reinterpret_cast<LRESULT>(field?fieldBackground:background);
@@ -186,7 +294,7 @@ LRESULT CALLBACK Procedure(HWND window,UINT message,WPARAM wParam,LPARAM lParam)
         auto rect=r;const auto text=Text(item->hwndItem);DrawTextW(item->hDC,text.c_str(),int(text.size()),&rect,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
         SelectObject(item->hDC,oldBrush);SelectObject(item->hDC,oldPen);SelectObject(item->hDC,oldFont);DeleteObject(brush);DeleteObject(pen);return TRUE;
     }
-    if (message==WM_DESTROY) {KillTimer(window,1);panel.store(nullptr);PostQuitMessage(0);return 0;}
+    if (message==WM_DESTROY) {if(inputRequested){DWORD foreground=0;GetWindowThreadProcessId(GetForegroundWindow(),&foreground);cursor::Capture(false,foreground==GetCurrentProcessId());}KillTimer(window,1);panel.store(nullptr);PostQuitMessage(0);return 0;}
     return DefWindowProcW(window,message,wParam,lParam);
 }
 void Run() {
@@ -199,7 +307,7 @@ void Run() {
     GetMonitorInfoW(MonitorFromWindow(game?game:GetForegroundWindow(),MONITOR_DEFAULTTOPRIMARY),&monitor);
     const auto& work=monitor.rcWork;
     // 高 DPI 的小屏幕仍需完整显示停止按钮与状态，面板初始位置限制在工作区内。
-    if (work.bottom>work.top&&work.right>work.left) scale=std::min({scale,std::max(70,int((work.bottom-work.top-80)*100/697)),std::max(70,int((work.right-work.left-60)*100/558))});
+    if (work.bottom>work.top&&work.right>work.left) scale=std::min({scale,std::max(55,int((work.bottom-work.top-80)*100/886)),std::max(55,int((work.right-work.left-60)*100/1044))});
     INITCOMMONCONTROLSEX common{sizeof(common),ICC_PROGRESS_CLASS};InitCommonControlsEx(&common);
     background=CreateSolidBrush(RGB(19,27,39));fieldBackground=CreateSolidBrush(RGB(31,40,54));
     normalFont=CreateFontW(-S(14),0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Microsoft YaHei UI");
@@ -207,8 +315,10 @@ void Run() {
     WNDCLASSEXW type{};type.cbSize=sizeof(type);type.lpfnWndProc=Procedure;type.hInstance=GetModuleHandleW(nullptr);type.hCursor=LoadCursorW(nullptr,IDC_ARROW);type.hbrBackground=background;type.lpszClassName=ClassName;
     const auto registered=RegisterClassExW(&type);
     if (registered||GetLastError()==ERROR_CLASS_ALREADY_EXISTS) {
-        RECT rect{0,0,S(558),S(697)};AdjustWindowRectEx(&rect,WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,FALSE,WS_EX_TOOLWINDOW|WS_EX_TOPMOST);
-        const auto window=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_TOPMOST,ClassName,L"SSMT Poser",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,work.right-work.left>0?work.right-(rect.right-rect.left)-24:CW_USEDEFAULT,work.bottom-work.top>0?work.top+24:CW_USEDEFAULT,rect.right-rect.left,rect.bottom-rect.top,game,nullptr,type.hInstance,nullptr);
+        RECT rect{0,0,S(1044),S(886)};AdjustWindowRectEx(&rect,WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,FALSE,WS_EX_TOOLWINDOW|WS_EX_TOPMOST);
+        // 跨线程 owner 会隐式合并输入队列和光标显隐计数；面板必须有独立输入队列。
+        // 最小化 / 前后台同步由 Update 处理，不能再用游戏 HWND 作为 owner。
+        const auto window=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_TOPMOST,ClassName,L"SSMT Poser",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,work.right-work.left>0?work.right-(rect.right-rect.left)-24:CW_USEDEFAULT,work.bottom-work.top>0?work.top+24:CW_USEDEFAULT,rect.right-rect.left,rect.bottom-rect.top,nullptr,nullptr,type.hInstance,nullptr);
         if (window) {
             panel.store(window);BOOL dark=TRUE;DwmSetWindowAttribute(window,20,&dark,sizeof(dark));
             const COLORREF caption=RGB(19,27,39),captionText=RGB(231,237,245);
@@ -224,14 +334,16 @@ void Run() {
     if (SUCCEEDED(com)) CoUninitialize();
 }
 }
-bool StartPoserUi(HANDLE stop,bool preview) {
-    if (thread.joinable()||!stop) return false;stopEvent=stop;previewMode=preview;closing=false;shownRevision=UINT64_MAX;shownGeneration=UINT64_MAX;view={};game=nullptr;visible=true;previousToggle=false;
-    try {thread=std::thread([]{try {Run();}catch (...) {const auto window=panel.load();if (window) DestroyWindow(window);}});return true;}catch (...) {return false;}
+bool StartPoserUi(HANDLE stop,bool preview,bool captureCursor) {
+    if (thread.joinable()||!stop) return false;stopEvent=stop;previewMode=preview;closing=false;shownRevision=UINT64_MAX;shownGeneration=UINT64_MAX;view={};game=nullptr;visible=true;previousToggle=false;passThrough=false;inputRequested=captureCursor&&!preview;
+    if(inputRequested)cursor::Install();
+    try {thread=std::thread([]{try {Run();}catch (...) {const auto window=panel.load();if (window) DestroyWindow(window);}});return true;}catch (...) {if(inputRequested)cursor::Uninstall();return false;}
 }
-void StopPoserUi() {
+void StopPoserUi(bool sharedHooksReleased) {
     closing=true;if (const auto active=dialog.load()) PostMessageW(active,WM_COMMAND,IDCANCEL,0);
     if (const auto window=panel.load()) PostMessageW(window,WM_TIMER,1,0);
     if (thread.joinable()) thread.join();stopEvent=nullptr;
+    if(inputRequested){cursor::Uninstall(sharedHooksReleased);inputRequested=false;}
 }
 HWND PoserUiWindow() {return panel.load();}
 HWND PoserUiFileDialog() {return dialog.load();}

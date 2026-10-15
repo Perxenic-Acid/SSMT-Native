@@ -1,6 +1,8 @@
 #include "RuntimeProbe.h"
 #include "PoserUi.h"
 #include "UiBridge.h"
+#include "IKTimingProbe.h"
+#include "CursorInput.h"
 #include <mutex>
 #include <thread>
 
@@ -27,7 +29,8 @@ poser::Status Initialize(const poser::HostServices* host) noexcept {
         if (!stopEvent) return poser::Failed;
         try {
             poser::ui::Reset(true);
-            if (!poser::StartPoserUi(stopEvent)) {CloseHandle(stopEvent);stopEvent=nullptr;poser::ui::Reset(false);return poser::Failed;}
+            if (!poser::StartPoserUi(stopEvent,false,true)) {CloseHandle(stopEvent);stopEvent=nullptr;poser::ui::Reset(false);return poser::Failed;}
+            log(poser::cursor::Available()?0:1,poser::cursor::Available()?"[Poser] Panel cursor capture available; pass-through defaults off.":"[Poser] Panel cursor hooks unavailable; cursor capture disabled.");
             worker = std::thread([log] {
                 try { poser::RunProbe(stopEvent, log); }
                 catch (...) {poser::ui::State(L"探针出现异常，请查看诊断日志。",false,false,false,true);log(2, "[Poser] Probe failed; see diagnostic state.");}
@@ -47,7 +50,7 @@ poser::Status Shutdown() noexcept {
         if (stopEvent) SetEvent(stopEvent);
         // 必须等 worker 退出才能允许宿主卸载 DLL，禁止 detached thread。
         if (worker.joinable()) worker.join();
-        poser::StopPoserUi();poser::ui::Reset(false);
+        poser::StopPoserUi(poser::AnimationReturnHookReleased()&&poser::IKTimingHooksReleased());poser::ui::Reset(false);
         if (stopEvent) CloseHandle(stopEvent);
         stopEvent = nullptr;
         return poser::Ok;

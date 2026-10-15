@@ -13,6 +13,7 @@ bool InstallIKTimingProbe(GenshinNativeRuntime& runtime, DWORD mainThread,
     std::ostream& report);
 bool RemoveIKTimingProbe(std::ostream& report);
 bool IKTimingProbeInstalled();
+bool IKTimingHooksReleased(); // worker 完成清理后才可查询。
 void ReportIKTimingProbe(std::ostream& report);
 
 // 主线程 LateUpdate 发布的足部目标。快照包含 Animator 身份，角色切换后

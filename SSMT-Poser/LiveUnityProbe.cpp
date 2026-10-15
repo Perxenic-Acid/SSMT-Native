@@ -3,6 +3,8 @@
 #include "BoneWriteProbe.h"
 #include "IKTimingProbe.h"
 #include "MotionPlayback.h"
+#include "FacePlayback.h"
+#include "NativePhysicsCapture.h"
 #include "UiBridge.h"
 #include <algorithm>
 #include <array>
@@ -1022,6 +1024,16 @@ bool RunMotionSession(GenshinNativeRuntime& runtime,HANDLE stop,HMODULE module,W
     // 初始化只读 reference；失败后仍走统一的恢复 / roots 清理，禁止退回当前动画基准。
     bool passed=ConfigureMotionAB(directory,report)&&InitializeMotionReference(runtime,job.items[1].meshClass,job.mesh,report);
     if (passed) {
+        std::span<const uintptr_t> physicsComponents;
+        for(const auto& candidate:job.groundCandidates)if(std::string_view(candidate.name)=="DynamicBoneArray") {
+            // 祖先扫描始终刷新；子树只在 fresh 时可用，禁止复用旧角色的缓存实例。
+            if(job.componentSubtreeFresh&&candidate.subtreeMatches==candidate.subtreeSampleCount)
+                physicsComponents={candidate.subtreeObjects.data(),candidate.subtreeSampleCount};
+            else if(candidate.hierarchyMatches==candidate.hierarchySampleCount)
+                physicsComponents={candidate.hierarchyObjects.data(),candidate.hierarchySampleCount};
+            break;
+        }
+        native_physics::Initialize(runtime,SelectedRigAnimator(),physicsComponents,report);
         job.mode=9;
         passed=DispatchJob(stop,module,window,report,true);
         ReportMotion(report);
@@ -1048,6 +1060,7 @@ bool RunMotionSession(GenshinNativeRuntime& runtime,HANDLE stop,HMODULE module,W
             job.items[2].klass,job.gameObjectClass,job.gameObject,job.gameObjectMethod,report);
     }
     if (passed) passed=ConfigureMotionAB(directory,report);
+    if (passed) InitializeMotionPhysics(report);
     report << "phase=" << (passed?"MOTION_COMMANDS_READY":"MOTION_REFERENCE_BLOCKED") << "; NUMPAD1=load_or_reload_and_play; NUMPAD2=stop_and_restore; NUMPAD3=finish_session; NumLock=ON; playback_control=MANUAL\n";
     report << "motion_path_file=motion_path.txt; command_flags=motion_play.flag,motion_stop.flag,motion_exit.flag\n"; report.flush();
     report << "AB_controls=NUMPAD6_Legacy; NUMPAD7_Basis; NUMPAD8_cycle_Identity_X_Y_Z_Frame0_Frame30_Frame120; selection_requires_STOPPED; start=NUMPAD1; restore=NUMPAD2\n";report.flush();
@@ -1078,6 +1091,20 @@ bool RunMotionSession(GenshinNativeRuntime& runtime,HANDLE stop,HMODULE module,W
             bool loadOnly=false,unload=false,startOnly=false;std::wstring selectedPath;
             ui::Command command{ui::CommandKind::Refresh};
             if (ui::Enabled()&&ui::Take(command)) {
+                if(command.kind==ui::CommandKind::LoadFace||command.kind==ui::CommandKind::ConfigureFace||command.kind==ui::CommandKind::MapFace) {
+                    if(MotionStatus()==1){continue;}
+                    job.mode=8;
+                    if(!DispatchJob(stop,module,window,report,true))continue;
+                    if(command.kind==ui::CommandKind::LoadFace)face::Load(command.text,report,stop);
+                    else face::Configure(command,report);
+                    continue;
+                }
+                if(command.kind==ui::CommandKind::ConfigurePhysics) {
+                    ConfigureMotionPhysics(command.text,command.generation,report);continue;
+                }
+                if(command.kind==ui::CommandKind::BakePhysics) {
+                    BakeMotionPhysics(directory.parent_path()/L"PhysicsCache",command.generation,stop,report);continue;
+                }
                 if (command.kind==ui::CommandKind::Refresh||command.kind==ui::CommandKind::BindActor||command.kind==ui::CommandKind::ReleaseRig) {
                     if (MotionStatus()==1) {ui::State(L"请先停止动作，再切换或刷新骨架。",true,true,true);continue;}
                     if (command.kind==ui::CommandKind::BindActor&&!ui::ValidateSelection(command)) {ui::State(L"骨架列表已更新或目标不可绑定，请重新选择。",true,ui::Read().loaded,false);continue;}
@@ -1106,6 +1133,10 @@ bool RunMotionSession(GenshinNativeRuntime& runtime,HANDLE stop,HMODULE module,W
                 unload=command.kind==ui::CommandKind::Unload;
             }
             if (stopCommand) {playCommand=false;loadOnly=false;startOnly=false;unload=false;}
+            if(playCommand&&ui::Enabled()) {
+                const auto controls=ui::Read();
+                if(controls.physics.mode==2&&controls.loaded)startOnly=true;
+            }
             previousPlay=play; previousStop=stopKey; previousExit=finish;
             if (exitCommand) {if (ui::Enabled()) {rescan=true;clearStaleTarget("EXIT");}break;}
             if (!passed) continue;
@@ -1166,6 +1197,9 @@ bool RunMotionSession(GenshinNativeRuntime& runtime,HANDLE stop,HMODULE module,W
             }
             if (playCommand&&passed) {
                 if (startOnly&&!ui::Read().loaded) {ui::State(L"请先载入动作文件。",true,false,false);continue;}
+                if(ui::Enabled()&&ui::Read().physics.mode==2&&!ui::Read().physics.bakedFrames) {
+                    ui::State(L"预烘焙模式请先点击生成 / 读取，再播放。",true,true,false);continue;
+                }
                 if(!ConfigureMotionAB(directory,report))continue;
                 job.mode=7; passed=DispatchJob(stop,module,window,report,true);
                 // A character switch can invalidate the managed/native identities
