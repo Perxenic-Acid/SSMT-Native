@@ -27,5 +27,21 @@
 `release-status.json` 将研究版本排除在正式目录之外；不会随普通官方打包自动发布。
 本地测试可使用 `-DevelopmentPluginId ssmt.poser.genshin-probe`，生成
 `dev.ssmt.poser.genshin-probe` 包并通过现有第三方包入口校验、确认、安装。
-开发包不生成官方目录，不改变 `ssmt.*` 只能来自 Native Release 的来源规则。
+开发包不生成官方目录，普通“从文件安装”仍拒绝未验证来源的 `ssmt.*` ID。
 显式开发打包可以包含 `publish: false` 的实验版本；发布状态文件只用于构建，不装入插件包。
+
+## build_native.ps1 本地构建发现
+
+主仓库 `build_native.ps1` 默认同时构建 Poser，可用 `-BuildPoserProbe $false` 跳过。
+构建后调用 `tools/stage-local-plugins.ps1`，从本目录的清单与本次 dist 产物生成
+`src-tauri/resources/PluginPackages/*.ssmtpkg`。没有清单的裸 DLL / 宿主测试 DLL 不作为市场插件。
+缺少 runtime DLL 的可选插件跳过，纯本体 / 外部工具插件可直接打包。
+
+市场自动只读发现此目录，即使 Native Release 请求失败也可显示本地插件。
+本地构建保留原 ID，便于复用已有插件贡献；标注“本地构建”，不声明 Native Release 官方来源。
+安装前展示文件路径、清单、权限与免责声明，安装时重新发现并检查所审阅 SHA256，
+通过现有包校验 / 安装器落盘。默认不启用，不修改游戏注入配置。
+本地安装命令只接受此受控目录重新发现的包，不允许任意路径绕过保留 ID 限制。
+
+`pack-official-plugins.ps1 -DevelopmentPluginId <ID> -LocalBuild` 为此本地管线保留 ID；
+不生成官方 Release 目录，也不发布。未加 `-LocalBuild` 的原有 dev ID 打包方式保持不变。

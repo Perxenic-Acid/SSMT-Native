@@ -5,10 +5,12 @@ param(
     [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\dist\plugin-release'),
     [string]$NativeArtifactDirectory = (Join-Path $PSScriptRoot '..\dist\Release'),
     [ValidatePattern('^[A-Za-z0-9._-]+$')]
-    [string]$DevelopmentPluginId
+    [string]$DevelopmentPluginId,
+    [switch]$LocalBuild
 )
 
 $ErrorActionPreference = 'Stop'
+if ($LocalBuild -and -not $DevelopmentPluginId) { throw '本地构建必须明确指定插件 ID' }
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $sourceRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\official-plugin-packages'))
@@ -36,7 +38,7 @@ foreach ($idDirectory in Get-ChildItem -LiteralPath $sourceRoot -Directory) {
         if ($manifest.id -cne $idDirectory.Name -or $manifest.version -cne $versionDirectory.Name) {
             throw "插件清单与目录不一致: $manifestPath"
         }
-        if ($DevelopmentPluginId) {
+        if ($DevelopmentPluginId -and -not $LocalBuild) {
             # 本地测试走已有第三方包校验，不能冒充已验证的 Native Release 来源。
             $manifest.id = 'dev.' + $manifest.id
         }
@@ -53,7 +55,7 @@ foreach ($idDirectory in Get-ChildItem -LiteralPath $sourceRoot -Directory) {
             Get-ChildItem -LiteralPath $versionDirectory.FullName -Force |
                 Where-Object { $_.Name -cne 'release-status.json' } |
                 Copy-Item -Destination $stagingRoot -Recurse
-            if ($DevelopmentPluginId) {
+            if ($DevelopmentPluginId -and -not $LocalBuild) {
                 [IO.File]::WriteAllText(
                     (Join-Path $stagingRoot 'ssmt-plugin.json'),
                     ($manifest | ConvertTo-Json -Depth 20),

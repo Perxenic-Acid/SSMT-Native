@@ -10,8 +10,8 @@ build/
 # rustfmt.toml
 
 /Plugins/
-native.zip
 SSMT-PluginHost.log
+*.zip
 
 # Local Poser investigation reports and test harnesses
 /SSMT-Poser/Reports/
