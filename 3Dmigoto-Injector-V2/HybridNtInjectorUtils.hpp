@@ -10,6 +10,7 @@
 #include <cstdint>
 
 #include "D3dxIniUtils.hpp"
+#include "DirectInjector.hpp"
 #include "InjectorUtils.hpp"
 #include "LaunchEvents.hpp"
 #include "LoaderOptions.hpp"
@@ -43,7 +44,19 @@ public:
     {
         LaunchEventEmitter events(options.machine_readable, machine_output);
         printf("[Loader] Starting injection.\n");
-        if (ini.launch.empty())
+        if (options.direct_injection)
+        {
+            if (options.preload_runtime || options.launch_barrier_id ||
+                (!options.wait_for_target && !ini.launch.empty()))
+            {
+                events.emit_error("preflight", "direct_requires_external_target",
+                    "Direct mode requires an external target without runtime preload or a resume barrier");
+                printf("[Loader] Use --inject-mode direct --wait-for-target for an official-launcher start.\n");
+                return false;
+            }
+            return DirectWaitMode(ini, options, events);
+        }
+        if (ini.launch.empty() || options.wait_for_target)
         {
             if (options.preload_runtime)
             {
@@ -62,6 +75,82 @@ public:
     }
 
 private:
+    static bool DirectWaitMode(D3dxIniUtils &ini, const LoaderOptions &options, LaunchEventEmitter &events)
+    {
+        const std::filesystem::path target(ini.target);
+        std::error_code error;
+        if (!target.is_absolute() || !std::filesystem::is_regular_file(target, error))
+        {
+            events.emit_error("preflight", "invalid_target_path", "Direct mode requires the full existing target executable path");
+            printf("[Loader] Invalid target executable path: %S\n", target.c_str());
+            return false;
+        }
+
+        std::vector<std::filesystem::path> libraries{std::filesystem::absolute(ini.module)};
+        for (const auto &dll : ini.inject_dlls)
+            libraries.push_back(std::filesystem::absolute(dll));
+        if (options.plugin_host_config)
+            libraries.push_back(GetSiblingPath(L"SSMT-PluginHost.dll"));
+        for (const auto &library : libraries)
+        {
+            if (!std::filesystem::is_regular_file(library, error))
+            {
+                events.emit_error("preflight", "injection_library_missing", "A required injection library does not exist");
+                printf("[Loader] Required injection library missing: %S\n", library.c_str());
+                return false;
+            }
+        }
+
+        printf("[Loader] Direct wait mode: target=%S, timeout=%lu ms.\n"
+            "[Loader] Start the game through its OFFICIAL LAUNCHER with DirectX 11 enabled.\n",
+            target.c_str(), options.process_timeout_ms);
+        fflush(stdout);
+        events.emit("waiting_for_target");
+        DWORD pid = 0;
+        DirectInjector::Handle process(DirectInjector::WaitForTarget(target, options.process_timeout_ms, pid));
+        if (!process)
+        {
+            events.emit_error("target_wait", "target_unavailable", "Target unavailable; check official launcher, executable path, timeout and access rights");
+            return false;
+        }
+        events.emit_pid("target_detected", pid);
+        for (size_t index = 0; index < libraries.size(); ++index)
+        {
+            const bool isHost = options.plugin_host_config && index == libraries.size() - 1;
+            if (isHost)
+                events.emit("plugin_host_begin");
+            const auto path = libraries[index].wstring();
+            events.emit_module("inject_begin", path.c_str());
+            if (!DirectInjector::InjectDll(process.get(), pid, libraries[index]))
+            {
+                events.emit_error("inject", "direct_injection_failed", "Direct injection or exact module verification failed; see loader log");
+                return false;
+            }
+            events.emit_module("inject_complete", path.c_str());
+            if (index == 0)
+                events.emit("runtime_detected");
+            if (isHost)
+            {
+                if (!StartPluginHost(process.get(), pid, libraries[index], *options.plugin_host_config, 15000))
+                {
+                    events.emit_error("plugin_host", "plugin_host_start_failed", "PluginHost failed to start");
+                    return false;
+                }
+                events.emit("plugin_host_ready");
+            }
+        }
+        if (WaitForSingleObject(process.get(), 0) != WAIT_TIMEOUT)
+        {
+            events.emit_error("runtime", "target_exited", "Target exited during injection");
+            return false;
+        }
+        events.emit("launch_complete");
+        // JSONL 调用方会收集退出码；不能因用户设置 delay=-1 而隐藏等待控制台输入。
+        if (!options.machine_readable)
+            AutoExitOrWait(ini.delay);
+        return true;
+    }
+
     static bool WaitBeforeResume(
         const LoaderOptions &options,
         const PROCESS_INFORMATION &process,
@@ -725,7 +814,8 @@ private:
         HANDLE process,
         DWORD processId,
         const std::filesystem::path &hostPath,
-        const std::filesystem::path &configPath)
+        const std::filesystem::path &configPath,
+        DWORD timeoutMs = INFINITE)
     {
         const std::uintptr_t remoteBase =
             FindRemoteModuleBase(
@@ -784,7 +874,8 @@ private:
                 process,
                 reinterpret_cast<PVOID>(remoteEntry),
                 remoteConfigPath,
-                hostExitCode);
+                hostExitCode,
+                timeoutMs);
 
         if (!started)
             return false;
@@ -1040,7 +1131,8 @@ private:
         HANDLE process,
         PVOID entryPoint,
         PVOID parameter,
-        DWORD &exitCode)
+        DWORD &exitCode,
+        DWORD timeoutMs = INFINITE)
     {
         auto ntThread = ResolveNtCreateThreadEx();
 
@@ -1076,7 +1168,7 @@ private:
         }
 
         const DWORD waitResult = WaitForSingleObject(
-            thread, INFINITE);
+            thread, timeoutMs);
 
         if (waitResult != WAIT_OBJECT_0)
         {
