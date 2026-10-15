@@ -48,6 +48,12 @@ add_custom_target(DeployGimiBridge ALL
 option(SSMT_GIMI_BRIDGE_BUILD_TESTS "构建 Bridge 混合设备转发回归" OFF)
 if(SSMT_GIMI_BRIDGE_BUILD_TESTS)
     enable_testing()
+    # 由主应用的真实资源测试传入完整计划；需要 NVIDIA 显卡及已下载组件。
+    add_executable(gimi-fsr2-dispatch-test tests/fsr2.cpp)
+    target_compile_features(gimi-fsr2-dispatch-test PRIVATE cxx_std_20)
+    target_compile_options(gimi-fsr2-dispatch-test PRIVATE /utf-8 /EHsc)
+    target_include_directories(gimi-fsr2-dispatch-test PRIVATE "${bridge_source}/third_party")
+    target_link_libraries(gimi-fsr2-dispatch-test PRIVATE dxgi)
     set(SSMT_GIMI_BRIDGE_TEST_SOURCE "${bridge_source}/Dx11FsrBridge.cpp" CACHE FILEPATH "可选未修复源码，用于验证回归能拒绝旧实现")
     add_executable(gimi-bridge-interop-test tests/main.cpp
         "${bridge_source}/RenderScaleMenu.cpp" "${bridge_source}/Fsr2TranslationLayer.cpp")

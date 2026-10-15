@@ -34,3 +34,12 @@ ctest --test-dir build-gimi-bridge/SSMT-Gimi-Bridge -C Release --output-on-failu
 产物位于 `dist/<配置>/SSMT-Gimi-Bridge.dll`，版本 1.2.3.1。构建脚本将它及许可证
 放进插件包并生成组件哈希。构建包不会自动安装或启用插件；本地更新通过插件市场
 已有入口完成，已有的 NR 下载和游戏选择可以保留。
+
+`gimi-fsr2-dispatch-test` 是另一个显式运行的实组件夹具，需要 NVIDIA 显卡，
+参数依次为托管 ReShade、Bridge、OptiScaler 的绝对 DLL 路径，并传入准备计划中的
+环境。它通过系统 D3D11 设备验证 FSR2 Create、两次 Dispatch、Destroy；主应用
+`prepares_real_components_without_game_directory_writes` ignored 测试可通过
+`SSMT_HOT_FSR2_FIXTURE` 调用它。错误的 `UseFsr2Dx11Inputs=auto` 可复现实机
+OptiScaler `+0x1C3E57` 崩溃，修复配置走 DX11 输入并完成 DLSS Feature 创建。
+该项不算 Runtime 共存或 NR 验收；混合设备测试继续单独确认 Runtime 私有身份。
+没有 SwapChain 时只执行两次 Dispatch，避免等待 Present 才回收的环形缓冲。
