@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)]
     [ValidatePattern('^[A-Za-z0-9._-]+$')]
     [string]$ReleaseTag,
@@ -53,8 +53,32 @@ foreach ($idDirectory in Get-ChildItem -LiteralPath $sourceRoot -Directory) {
         try {
             # 发布状态属于构建侧元信息，不写进可安装插件包。
             Get-ChildItem -LiteralPath $versionDirectory.FullName -Force |
-                Where-Object { $_.Name -cne 'release-status.json' } |
+                Where-Object { $_.Name -notin @('release-status.json', 'build-artifacts.json') } |
                 Copy-Item -Destination $stagingRoot -Recurse
+            # 插件的辅助组件不属于 Plugin ABI DLL，不能放进 runtimePlugins 自动注入。
+            $buildArtifactsPath = Join-Path $versionDirectory.FullName 'build-artifacts.json'
+            if (Test-Path -LiteralPath $buildArtifactsPath -PathType Leaf) {
+                $buildArtifacts = Get-Content -LiteralPath $buildArtifactsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+                foreach ($item in $buildArtifacts.files) {
+                    $sourceName = [string]$item.source
+                    $relative = [string]$item.destination
+                    if ($sourceName -notmatch '^[A-Za-z0-9._-]+$' -or [string]::IsNullOrWhiteSpace($relative) -or
+                        [IO.Path]::IsPathRooted($relative) -or $relative -match '(^|[\\/])\.\.([\\/]|$)' -or $relative -match ':') {
+                        throw '非法辅助构建产物路径'
+                    }
+                    $artifact = Join-Path $NativeArtifactDirectory $sourceName
+                    $destination = [IO.Path]::GetFullPath((Join-Path $stagingRoot $relative))
+                    if (-not $destination.StartsWith($stagingRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+                        throw "辅助构建产物越出包目录: $relative"
+                    }
+                    if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) { throw "未构建辅助组件: $artifact" }
+                    [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination)) | Out-Null
+                    Copy-Item -LiteralPath $artifact -Destination $destination
+                    # 哈希随已验证的完整插件包分发；启动时再次核对组件，拒绝损坏文件。
+                    $hash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+                    [IO.File]::WriteAllText($destination + '.sha256', $hash, [Text.UTF8Encoding]::new($false))
+                }
+            }
             if ($DevelopmentPluginId -and -not $LocalBuild) {
                 [IO.File]::WriteAllText(
                     (Join-Path $stagingRoot 'ssmt-plugin.json'),

@@ -22,6 +22,10 @@
 含 `runtimePlugins` 的包会从 `dist/Release`（可用 `-NativeArtifactDirectory` 指定）补入
 已编译 DLL。打包器在临时目录组装，缺少声明的 DLL 时失败，源码目录不保存编译产物。
 
+非 Plugin ABI 的辅助组件可由 `build-artifacts.json` 声明构建产物与包内相对路径，
+打包时一并生成 SHA-256 旁置文件；该构建清单不装入包。DLSS5 0.2.1 使用此方式
+携带 SSMT 适配的 GIMI Bridge 与许可证，不将辅助 DLL 声明为 `runtimePlugins`。
+
 原神运行时探针源码位于 `SSMT-Poser/`，已完成当前样本的 native resolver、Rig / Actor
 枚举和可见的单骨旋转 / 恢复；新增 VMD FK 旋转预览已通过本地测试，实机动作验证待完成。
 `release-status.json` 将研究版本排除在正式目录之外；不会随普通官方打包自动发布。

@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$NativeArtifactDirectory,
     [Parameter(Mandatory = $true)][string]$OutputDirectory,
@@ -20,6 +20,14 @@ try {
         # 未构建的可选目标不生成不完整插件包；纯本体 / 外部工具插件无需 DLL。
         $missing = @($manifests | ForEach-Object { $_.contributions.runtimePlugins } | Where-Object {
             -not (Test-Path -LiteralPath (Join-Path $artifactRoot ([IO.Path]::GetFileName($_.path))) -PathType Leaf)
+        })
+        $missing += @(Get-ChildItem -LiteralPath $plugin.FullName -Directory | ForEach-Object {
+            $buildArtifactsPath = Join-Path $_.FullName 'build-artifacts.json'
+            if (Test-Path -LiteralPath $buildArtifactsPath -PathType Leaf) {
+                (Get-Content -LiteralPath $buildArtifactsPath -Raw -Encoding UTF8 | ConvertFrom-Json).files | Where-Object {
+                    -not (Test-Path -LiteralPath (Join-Path $artifactRoot $_.source) -PathType Leaf)
+                }
+            }
         })
         if ($missing.Count) { Write-Warning "跳过尚未构建的插件：$($plugin.Name)"; continue }
         & (Join-Path $PSScriptRoot 'pack-official-plugins.ps1') -ReleaseTag local-build `
