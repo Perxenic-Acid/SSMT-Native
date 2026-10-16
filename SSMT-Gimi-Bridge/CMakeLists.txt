@@ -3,15 +3,17 @@ find_package(Git REQUIRED)
 # 使用与现有 FSR2 转译链相同的 1.2.3 源码，避免引入新版 FFX12 接管路线。
 # 固定 commit 与归档哈希，补丁仅存在于构建目录，便于审阅和同步上游。
 set(bridge_commit cbdf5c11bfea8d4cb423866dabb96a755fb8ab0b)
-set(archive "${CMAKE_BINARY_DIR}/bridge-${bridge_commit}.zip")
 set(archive_hash 996cd2ef72df58748d029d2dec525c486e11edc78b7761ae7a4ec7612aee6f8c)
-if(EXISTS "${archive}")
-    file(SHA256 "${archive}" actual_hash)
-endif()
-if(NOT actual_hash STREQUAL archive_hash)
-    file(DOWNLOAD "https://codeload.github.com/AizawaHikaru233/genshin_fsr_brigde/zip/${bridge_commit}"
-        "${archive}" EXPECTED_HASH "SHA256=${archive_hash}" TLS_VERIFY ON TIMEOUT 120)
-endif()
+set(SSMT_NATIVE_DOWNLOAD_CACHE "${CMAKE_SOURCE_DIR}/.cache/downloads" CACHE PATH "Native 固定源码归档缓存，可跨构建目录复用")
+set(SSMT_GIMI_BRIDGE_ARCHIVE "" CACHE FILEPATH "可选的 Bridge 同版本离线 ZIP，仍校验固定 SHA-256")
+include("${CMAKE_CURRENT_SOURCE_DIR}/AcquireArchive.cmake")
+ssmt_acquire_bridge_archive(archive
+    "${SSMT_NATIVE_DOWNLOAD_CACHE}/bridge-${bridge_commit}.zip"
+    "https://codeload.github.com/AizawaHikaru233/genshin_fsr_brigde/zip/${bridge_commit}"
+    "${archive_hash}"
+    LOCAL_ARCHIVE "${SSMT_GIMI_BRIDGE_ARCHIVE}"
+    CANDIDATES "${CMAKE_BINARY_DIR}/bridge-${bridge_commit}.zip"
+        "${CMAKE_SOURCE_DIR}/build/bridge-${bridge_commit}.zip")
 set(source_root "${CMAKE_BINARY_DIR}/bridge-source/genshin_fsr_brigde-${bridge_commit}")
 set(patch "${CMAKE_CURRENT_SOURCE_DIR}/per-instance-methods.patch")
 file(SHA256 "${patch}" patch_hash)

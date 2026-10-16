@@ -9,6 +9,37 @@
 保留 FSR2 转译导出，不引入新版 FFX12 后端、安装器或其他游戏补丁。
 GPL-3.0 及第三方声明随插件包分发；完整对应源码由固定上游源码、补丁及本目录组成。
 
+## 源码归档与离线构建
+
+不同构建目录共用 `native/.cache/downloads`，可用 CMake 参数
+`SSMT_NATIVE_DOWNLOAD_CACHE` 指定其他缓存目录。配置时先校验共享归档，再尝试当前
+构建目录及旧 `native/build` 中的同版本 ZIP；只有哈希正确的完整归档才会被复用。
+每个构建目录仍单独解压和应用补丁，不共用已修改的上游源码。
+
+无可用缓存时从固定上游下载，最多尝试三次，每次最多 120 秒、连续无数据最多 30 秒。
+下载写入独立临时文件，通过 SHA-256 后才替换共享缓存；失败清理本次半包并停止配置，
+不会继续解压。并行构建通过归档锁协调，无法取得锁时给出缓存占用提示。
+
+可在 SSMT 主仓库根目录先配置离线 ZIP，再重试原构建入口（参数会保存在对应 CMake 缓存）：
+
+```powershell
+cmake -S native -B build/native-release -A x64 `
+  -DSSMT_GIMI_BRIDGE_ARCHIVE="C:/Downloads/bridge-cbdf5c11bfea8d4cb423866dabb96a755fb8ab0b.zip"
+```
+
+离线 ZIP 也必须来自上述固定 commit，SHA-256 为
+`996cd2ef72df58748d029d2dec525c486e11edc78b7761ae7a4ec7612aee6f8c`。
+显式路径不存在或哈希不符时直接报错，不改用另一份归档或跳过校验。
+删除该离线文件前可用 `-DSSMT_GIMI_BRIDGE_ARCHIVE=` 清除缓存中的路径。
+
+下载逻辑的回归不访问外网、不加载图形 DLL，可在主仓库根目录运行：
+
+```powershell
+python native/SSMT-Gimi-Bridge/tests/test_archive_download.py
+```
+
+## 对象转发适配与图形验证
+
 上游将第一个 COM 对象的方法保存在进程全局，导致 Runtime 包装设备的方法被
 用于系统/显卡辅助设备。SSMT 改为按对象查找原始虚表；稳定调用使用线程缓存，
 不增加每次渲染的锁、分配、文件读取或模块查询。最终 Release 清理该代对象的

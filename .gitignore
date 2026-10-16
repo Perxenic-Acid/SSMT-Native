@@ -1,4 +1,5 @@
 build/
+/.cache/
 
 # 独立 CMake 目标的本机构建目录
 /build-*/
