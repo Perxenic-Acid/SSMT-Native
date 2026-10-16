@@ -4,6 +4,10 @@
 
 D3D11 预加载会先加载系统目录的 D3D11，再加载 SSMT Runtime，确保后者在初始化时能挂钩真实系统入口。否则 Unity 稍后加载系统库时可能绕开 Runtime。最终检测比较完整文件身份，不能把系统同名 DLL 当作 Runtime。`InjectorRuntimeGraphics` 使用真实 Runtime、延迟加载系统库的目标及 WARP Context 身份检查；可给脚本传入 `-ReShadePath` 检查同一 Host 共存。它仍不能代替游戏内 Mod / NR 验收。
 
+`InjectorUnitySwapChain` 另外覆盖 BGRA 设备、Device1 / Context1、分开创建交换链以及 `GetDevice` 取回设备。夹具通过取回的 Context 清屏，再回读像素，确认 INI 的替换命令确实执行；只检查模块存在或 Present 不足以证明 Mod 路径有效。PowerShell 先在恢复屏障处持有目标进程句柄，再检查退出码和完成标记，避免目标提前退出被误报通过。注入用例通过 CTest 资源锁串行运行。
+
+图形脚本默认显式选择 WARP，不继承外层的硬件测试环境。只有手动传入 `-Hardware` 才使用显卡；真实 ReShade 对 WARP 会跳过部分代理，因此 WARP 共存不能替代硬件验收。硬件测试若伴随 `nvlddmkm 153` 或其他驱动异常，应保留当次时间和日志并停止重复运行，不能将超时一概归因于联网检查，也不能据此断言已经定位到指针冲突。
+
 `--set-env NAME=VALUE`、`--unset-env NAME` 可以重复使用。环境在提权后的 Run.exe 内设置，由本次创建的游戏继承，不修改 SSMT、系统或用户的环境；不能与外部目标的 `--inject-mode direct` 一起使用。Hosted ReShade 应显式传入其 DLL、配置路径及图形 Hook 开关，避免依赖 ShellExecute 跨提权继承环境。
 
 终末地使用 `--inject-mode direct --wait-for-target --process-timeout 120`，目标由官方启动器创建。目标匹配完整 EXE 文件身份，Runtime 检测也匹配实际 DLL 文件身份；系统同名 DLL 不视为成功。失败不会结束外部创建的游戏。

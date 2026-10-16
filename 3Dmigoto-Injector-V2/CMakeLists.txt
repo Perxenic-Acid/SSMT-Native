@@ -72,5 +72,16 @@ if(SSMT_INJECTOR_BUILD_TESTS)
                 -LoaderPath "$<TARGET_FILE:3Dmigoto-Injector-V2>"
                 -TargetPath "$<TARGET_FILE:InjectorFixtureTarget>"
                 -RuntimePath "${SSMT_TEST_RUNTIME_DLL}")
+        add_test(NAME InjectorUnitySwapChain
+            COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+                -File "${CMAKE_CURRENT_SOURCE_DIR}/Tests/RuntimeGraphicsTests.ps1"
+                -LoaderPath "$<TARGET_FILE:3Dmigoto-Injector-V2>"
+                -TargetPath "$<TARGET_FILE:InjectorFixtureTarget>"
+                -RuntimePath "${SSMT_TEST_RUNTIME_DLL}" -UnityDevice)
+    endif()
+    # 注入器与上游共用单实例互斥量；这些进程测试不能并行运行。
+    set_tests_properties(InjectorDirectIntegration PROPERTIES RESOURCE_LOCK ssmt-injector)
+    if(TEST InjectorRuntimeGraphics)
+        set_tests_properties(InjectorRuntimeGraphics InjectorUnitySwapChain PROPERTIES RESOURCE_LOCK ssmt-injector TIMEOUT 110)
     endif()
 endif()
