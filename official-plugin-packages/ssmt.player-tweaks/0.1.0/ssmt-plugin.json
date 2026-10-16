@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "ssmt.player-tweaks",
+  "name": "SSMT Player Tweaks",
+  "version": "0.1.0",
+  "author": "SSMT",
+  "compatibility": {
+    "ssmt": ">=4.x",
+    "platforms": [
+      "windows-x64"
+    ],
+    "games": [
+      "GIMI",
+      "SRMI"
+    ]
+  },
+  "contributions": {
+    "hostExtensions": [
+      {
+        "id": "settings",
+        "provider": "ssmt.player-tweaks",
+        "config": "host/features.json",
+        "settingsComponent": "ssmt.player-tweaks.settings"
+      }
+    ]
+  },
+  "externalDependencies": [],
+  "permissions": [
+    "filesystem.read",
+    "filesystem.write",
+    "native.inject"
+  ]
+}

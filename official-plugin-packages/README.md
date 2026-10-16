@@ -47,5 +47,11 @@
 通过现有包校验 / 安装器落盘。默认不启用，不修改游戏注入配置。
 本地安装命令只接受此受控目录重新发现的包，不允许任意路径绕过保留 ID 限制。
 
+本体贡献迁移版本：DLSS5 0.2.2、Shade 0.1.1、Player Tweaks 0.1.0。
+这些包通过 `hostExtensions` 携带路线、资源位置与功能声明；由新版 SSMT 中已注册
+provider 执行，不加载清单中的任意代码。Player Tweaks 的原神 Hook 作为辅助产物随包
+分发，崩铁只使用客户端设置后端，不注入该 DLL。迁移版本暂缓正式发布，测试包
+可由现有本地打包入口生成；打包成功不代表游戏内效果或长期稳定性已经验收。
+
 `pack-official-plugins.ps1 -DevelopmentPluginId <ID> -LocalBuild` 为此本地管线保留 ID；
 不生成官方 Release 目录，也不发布。未加 `-LocalBuild` 的原有 dev ID 打包方式保持不变。

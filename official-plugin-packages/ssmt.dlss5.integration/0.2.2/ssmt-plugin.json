@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "id": "ssmt.dlss5.integration",
+  "name": "DLSS 5 Integration",
+  "version": "0.2.2",
+  "author": "SSMT",
+  "compatibility": {
+    "ssmt": ">=4.x",
+    "platforms": [
+      "windows-x64"
+    ],
+    "games": [
+      "GIMI",
+      "SRMI",
+      "WWMI",
+      "ZZMI",
+      "ZZMIDX12"
+    ]
+  },
+  "contributions": {
+    "runtimePlugins": [],
+    "launcherAdapters": [],
+    "uiPages": [],
+    "externalManagers": [
+      {
+        "id": "dlss5-swapper",
+        "executable": "${external.dlss5-swapper}/DLSS5-Swapper.exe",
+        "workingDirectory": "${external.dlss5-swapper}"
+      }
+    ],
+    "hostExtensions": [
+      {
+        "id": "graphics",
+        "provider": "ssmt.graphics.dlss5",
+        "priority": 100,
+        "config": "host/graphics.json",
+        "settingsComponent": "ssmt.dlss5.settings"
+      }
+    ]
+  },
+  "externalDependencies": [
+    {
+      "id": "dlss5-swapper",
+      "type": "directory",
+      "requiredFiles": [
+        "DLSS5-Swapper.exe"
+      ],
+      "requiredFor": [
+        "external-manager"
+      ]
+    },
+    {
+      "id": "dlss5-adapter",
+      "type": "directory",
+      "requiredFiles": [
+        "src/ssmt-cli.js",
+        "src/core/apply.js"
+      ],
+      "requiredFor": [
+        "external-manager"
+      ]
+    },
+    {
+      "id": "dlss5-payload",
+      "type": "directory",
+      "requiredFiles": [
+        "streamline/nvngx_dlssnr.dll"
+      ],
+      "requiredFor": [
+        "external-manager"
+      ]
+    }
+  ],
+  "permissions": [
+    "process.spawn",
+    "filesystem.read",
+    "filesystem.write",
+    "native.inject",
+    "network"
+  ]
+}

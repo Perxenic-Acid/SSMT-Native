@@ -1,0 +1,6 @@
+{
+  "files": [
+    { "source": "SSMT-Gimi-Bridge.dll", "destination": "bridge/Dx11FsrBridge.dll" },
+    { "source": "SSMT-Gimi-Bridge-LICENSE.txt", "destination": "bridge/LICENSE.txt" }
+  ]
+}
