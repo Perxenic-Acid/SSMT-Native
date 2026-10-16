@@ -2,6 +2,8 @@
 
 默认模式通过 CBT Hook 加载 Runtime，并按 `d3dx.ini` 的 `inject_dlls` 顺序处理附加 DLL。`--preload-runtime` 在挂起目标中先加载 SSMT Runtime，再加载附加 DLL 和可选 PluginHost，最后恢复目标主线程；这用于需要在图形初始化前建立完整链路的热注入场景，不向游戏目录放置代理 DLL。
 
+D3D11 预加载会先加载系统目录的 D3D11，再加载 SSMT Runtime，确保后者在初始化时能挂钩真实系统入口。否则 Unity 稍后加载系统库时可能绕开 Runtime。最终检测比较完整文件身份，不能把系统同名 DLL 当作 Runtime。`InjectorRuntimeGraphics` 使用真实 Runtime、延迟加载系统库的目标及 WARP Context 身份检查；可给脚本传入 `-ReShadePath` 检查同一 Host 共存。它仍不能代替游戏内 Mod / NR 验收。
+
 `--set-env NAME=VALUE`、`--unset-env NAME` 可以重复使用。环境在提权后的 Run.exe 内设置，由本次创建的游戏继承，不修改 SSMT、系统或用户的环境；不能与外部目标的 `--inject-mode direct` 一起使用。Hosted ReShade 应显式传入其 DLL、配置路径及图形 Hook 开关，避免依赖 ShellExecute 跨提权继承环境。
 
 终末地使用 `--inject-mode direct --wait-for-target --process-timeout 120`，目标由官方启动器创建。目标匹配完整 EXE 文件身份，Runtime 检测也匹配实际 DLL 文件身份；系统同名 DLL 不视为成功。失败不会结束外部创建的游戏。

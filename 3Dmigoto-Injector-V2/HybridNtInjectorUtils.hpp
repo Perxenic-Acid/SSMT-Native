@@ -296,6 +296,24 @@ private:
         if (options.preload_runtime)
         {
             const auto runtimePath = preloadPath.wstring();
+            // Unity 可能直到恢复主线程后才加载系统 D3D11。Runtime 在 DllMain 中
+            // 只挂钩已存在的系统模块；让同名 Runtime 先到会被误判为代理加载，
+            // 后续 ReShade / Unity 从系统绝对路径加载时便可能绕过 Mod 渲染链。
+            // 在远程线程中预热系统库，保持 Runtime 的既有初始化及 DllMain 约束。
+            if (_wcsicmp(preloadPath.filename().c_str(), L"d3d11.dll") == 0)
+            {
+                wchar_t directory[MAX_PATH]{};
+                const UINT length = GetSystemDirectoryW(directory, MAX_PATH);
+                const auto systemD3D11 = std::filesystem::path(directory) / L"d3d11.dll";
+                if (!length || length >= MAX_PATH || !NtInjectDll(pi.hProcess, systemD3D11.c_str()))
+                {
+                    events.emit_error("inject", "system_d3d11_preload_failed", "System D3D11 preload failed");
+                    TerminateProcess(pi.hProcess, ERROR_DLL_INIT_FAILED);
+                    CloseHandle(pi.hThread);
+                    CloseHandle(pi.hProcess);
+                    return false;
+                }
+            }
             events.emit_module("inject_begin", runtimePath.c_str());
             if (!NtInjectDll(pi.hProcess, runtimePath.c_str()))
             {
@@ -549,12 +567,7 @@ private:
         const wchar_t *modulePath,
         DWORD timeoutMs)
     {
-        const wchar_t *base =
-            wcsrchr(modulePath, L'\\');
-
-        base = base
-                   ? base + 1
-                   : modulePath;
+        const auto expected = std::filesystem::absolute(modulePath);
 
         DWORD waited = 0;
         bool verificationDenied = false;
@@ -615,7 +628,7 @@ private:
             {
                 do
                 {
-                    if (_wcsicmp(me.szModule, base) == 0)
+                    if (DirectInjector::SameFile(me.szExePath, expected))
                     {
                         CloseHandle(snap);
                         return ModuleWaitResult::Loaded;

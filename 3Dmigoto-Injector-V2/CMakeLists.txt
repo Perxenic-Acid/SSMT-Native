@@ -64,4 +64,13 @@ if(SSMT_INJECTOR_BUILD_TESTS)
             -LoaderPath "$<TARGET_FILE:3Dmigoto-Injector-V2>"
             -TargetPath "$<TARGET_FILE:InjectorFixtureTarget>"
             -FixtureDllPath "$<TARGET_FILE:InjectorFixture>")
+    set(SSMT_TEST_RUNTIME_DLL "${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/x64/Release/d3d11.dll" CACHE FILEPATH "真实 Runtime 热加载回归使用的 DLL")
+    if(EXISTS "${SSMT_TEST_RUNTIME_DLL}")
+        add_test(NAME InjectorRuntimeGraphics
+            COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+                -File "${CMAKE_CURRENT_SOURCE_DIR}/Tests/RuntimeGraphicsTests.ps1"
+                -LoaderPath "$<TARGET_FILE:3Dmigoto-Injector-V2>"
+                -TargetPath "$<TARGET_FILE:InjectorFixtureTarget>"
+                -RuntimePath "${SSMT_TEST_RUNTIME_DLL}")
+    endif()
 endif()
