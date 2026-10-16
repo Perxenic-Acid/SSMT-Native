@@ -42,6 +42,7 @@
     {
       "id": "dlss5-swapper",
       "type": "directory",
+      "downloadHint": "仅用于旧外部管理器；原下载源当前不可用。热注入无需此工具，请使用上方组件配置入口。",
       "requiredFiles": [
         "DLSS5-Swapper.exe"
       ],
@@ -52,6 +53,7 @@
     {
       "id": "dlss5-adapter",
       "type": "directory",
+      "downloadHint": "仅用于旧外部管理器；SSMT 专用适配器尚未独立发布。热注入无需此依赖。",
       "requiredFiles": [
         "src/ssmt-cli.js",
         "src/core/apply.js"
@@ -63,6 +65,7 @@
     {
       "id": "dlss5-payload",
       "type": "directory",
+      "downloadHint": "仅用于旧外部管理器；热注入所需组件可从上方入口按显卡下载，无需单独配置此目录。",
       "requiredFiles": [
         "streamline/nvngx_dlssnr.dll"
       ],

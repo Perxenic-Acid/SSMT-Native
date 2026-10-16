@@ -55,6 +55,8 @@
     {
       "id": "hoyoshade",
       "type": "directory",
+      "downloadUrl": "https://github.com/DuolaD/HoYoShade/releases",
+      "downloadHint": "下载并解压 HoYoShade，按发布说明补齐效果库，再选择包含所列文件的目录。",
       "requiredFiles": [
         "inject.exe",
         "ReShade64.dll",
