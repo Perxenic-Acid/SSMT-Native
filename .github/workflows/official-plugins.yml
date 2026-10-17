@@ -122,6 +122,9 @@ jobs:
             Copy-Item -LiteralPath $source -Destination $coreDir -ErrorAction Stop
           }
           Compress-Archive -Path "$coreDir/*" -DestinationPath "$assetsDir/SSMT-Native-windows-x64.zip"
+          # 兼容原 ZIP，同时允许按需下载单个核心文件。
+          Copy-Item -LiteralPath (Join-Path $coreDir 'Run.exe') -Destination $assetsDir -ErrorAction Stop
+          Copy-Item -LiteralPath (Join-Path $coreDir 'ssmt_plugin_host.dll') -Destination $assetsDir -ErrorAction Stop
 
           Get-ChildItem -LiteralPath $assetsDir -File |
             Where-Object Name -ne 'SHA256SUMS.txt' |
@@ -132,7 +135,7 @@ jobs:
             } | Set-Content "$assetsDir/SHA256SUMS.txt" -Encoding utf8
 
           # 校验打包过程真正执行完毕，防止仅上传空插件目录仍被误判为构建成功。
-          foreach ($required in @('SSMT-Native-windows-x64.zip', 'ssmt-plugin-catalog.json', 'SHA256SUMS.txt')) {
+          foreach ($required in @('Run.exe', 'ssmt_plugin_host.dll', 'SSMT-Native-windows-x64.zip', 'ssmt-plugin-catalog.json', 'SHA256SUMS.txt')) {
             $candidate = Join-Path $assetsDir $required
             if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
               throw "正式发布候选文件缺失：$candidate"
