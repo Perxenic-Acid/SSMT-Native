@@ -98,8 +98,10 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          ./tools/pack-official-plugins.ps1 -ReleaseTag $env:RELEASE_TAG
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # PowerShell .ps1 不是原生命令，成功返回后 LASTEXITCODE 可能为 $null。
+          # 旧写法 ($LASTEXITCODE -ne 0) 在 $null 时成立，会以 exit $null 静默提前结束打包。
+          & ./tools/pack-official-plugins.ps1 -ReleaseTag $env:RELEASE_TAG
+          if (-not $?) { throw '官方插件打包脚本执行失败' }
           $assetsDir = 'dist/plugin-release'
           $catalog = Get-Content "$assetsDir/ssmt-plugin-catalog.json" -Raw | ConvertFrom-Json
           $count = @($catalog.entries).Count
@@ -128,6 +130,20 @@ jobs:
               $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
               "$hash  $($_.Name)"
             } | Set-Content "$assetsDir/SHA256SUMS.txt" -Encoding utf8
+
+          # 校验打包过程真正执行完毕，防止仅上传空插件目录仍被误判为构建成功。
+          foreach ($required in @('SSMT-Native-windows-x64.zip', 'ssmt-plugin-catalog.json', 'SHA256SUMS.txt')) {
+            $candidate = Join-Path $assetsDir $required
+            if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+              throw "正式发布候选文件缺失：$candidate"
+            }
+            if ((Get-Item -LiteralPath $candidate).Length -eq 0) {
+              throw "正式发布候选文件为空：$candidate"
+            }
+          }
+          $releaseFiles = @(Get-ChildItem -LiteralPath $assetsDir -File)
+          "Release candidate files: $($releaseFiles.Count)" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          $releaseFiles | Sort-Object Name | Format-Table Name,Length -AutoSize
 
       - name: 保存正式发布候选文件（Actions Artifact）
         uses: actions/upload-artifact@v4
