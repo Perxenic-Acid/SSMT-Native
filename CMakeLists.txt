@@ -14,7 +14,10 @@ endif()
 
 add_subdirectory(3Dmigoto-Injector-V2)
 add_subdirectory(MessageBoxTestDll)
-add_subdirectory(SSMT-Player-Tweaks)
+option(SSMT_BUILD_PLAYER_TWEAKS "构建可选的 Player Tweaks 插件" ON)
+if(SSMT_BUILD_PLAYER_TWEAKS)
+    add_subdirectory(SSMT-Player-Tweaks)
+endif()
 option(SSMT_BUILD_GIMI_BRIDGE "构建可选 DLSS5 插件的适配 Bridge" ON)
 if(SSMT_BUILD_GIMI_BRIDGE)
     add_subdirectory(SSMT-Gimi-Bridge)
@@ -36,15 +39,19 @@ add_custom_target(DeploySSMTNative ALL
         "$<TARGET_FILE:3Dmigoto-Injector-V2>"
         "${SSMT_DIST_DIR}/Run.exe"
 
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "$<TARGET_FILE:SSMT-Player-Tweaks>"
-        "${SSMT_DIST_DIR}/SSMT-Player-Tweaks.dll"
-
     COMMENT "Deploying SSMT Native binaries"
 )
 
 add_dependencies(
     DeploySSMTNative
     3Dmigoto-Injector-V2
-    SSMT-Player-Tweaks
 )
+
+if(TARGET SSMT-Player-Tweaks)
+    add_custom_command(TARGET DeploySSMTNative POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:SSMT-Player-Tweaks>"
+            "${SSMT_DIST_DIR}/SSMT-Player-Tweaks.dll"
+    )
+    add_dependencies(DeploySSMTNative SSMT-Player-Tweaks)
+endif()

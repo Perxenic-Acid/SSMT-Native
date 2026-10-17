@@ -19,7 +19,7 @@ try {
         })
         # 未构建的可选目标不生成不完整插件包；纯本体 / 外部工具插件无需 DLL。
         $missing = @($manifests | ForEach-Object { $_.contributions.runtimePlugins } | Where-Object {
-            -not (Test-Path -LiteralPath (Join-Path $artifactRoot ([IO.Path]::GetFileName($_.path))) -PathType Leaf)
+            $null -ne $_ -and -not (Test-Path -LiteralPath (Join-Path $artifactRoot ([IO.Path]::GetFileName($_.path))) -PathType Leaf)
         })
         $missing += @(Get-ChildItem -LiteralPath $plugin.FullName -Directory | ForEach-Object {
             $buildArtifactsPath = Join-Path $_.FullName 'build-artifacts.json'

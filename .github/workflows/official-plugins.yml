@@ -12,6 +12,13 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: 构建独立插件所需的 Native 产物
+        shell: pwsh
+        run: |
+          cmake -S . -B build-native -A x64 -DSSMT_BUILD_PLAYER_TWEAKS=ON -DSSMT_BUILD_GIMI_BRIDGE=ON -DSSMT_BUILD_POSER_PROBE=OFF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build-native --config Release --target DeploySSMTNative DeployGimiBridge --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: 验证原神 Poser 实验插件
         shell: pwsh
         run: |

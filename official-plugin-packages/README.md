@@ -1,7 +1,7 @@
 # Native Release 官方插件包
 
 `official-plugin-packages/<插件 ID>/<版本>/` 是官方插件包的来源。Native Release 发布时，
-工作流运行 `tools/pack-official-plugins.ps1`，生成 `<ID>-<版本>.ssmtpkg`
+工作流独立构建所需 Native 产物，再运行 `tools/pack-official-plugins.ps1`，生成 `<ID>-<版本>.ssmtpkg`
 与 `ssmt-plugin-catalog.json` 并上传到同一 Release。
 版本目录中可放 `release-status.json` 并设置 `"publish": false` 暂缓发布。
 当前旧 DLSS5 Swapper 桥接版暂缓发布，避免把需要玩家手工准备外部 DLL 的路线
@@ -38,10 +38,15 @@
 
 主仓库 `build_native.ps1` 默认同时构建 Poser，可用 `-BuildPoserProbe $false` 跳过。
 构建后调用 `tools/stage-local-plugins.ps1`，从本目录的清单与本次 dist 产物生成
-`src-tauri/resources/PluginPackages/*.ssmtpkg`。没有清单的裸 DLL / 宿主测试 DLL 不作为市场插件。
+主仓库 `build/plugin-packages/*.ssmtpkg`。没有清单的裸 DLL / 宿主测试 DLL 不作为市场插件。
 缺少 runtime DLL 的可选插件跳过，纯本体 / 外部工具插件可直接打包。
+未声明 `runtimePlugins` 不等于缺少 DLL；PowerShell 管线须过滤缺省字段产生的空值，
+辅助组件仍按 `build-artifacts.json` 独立检查。
 
-市场自动只读发现此目录，即使 Native Release 请求失败也可显示本地插件。
+仅 Debug 应用只读发现此开发目录，即使 Native Release 请求失败也可显示开发包。
+正式版不扫描开发包或旧版 `resources/PluginPackages`，安装器不携带插件包、旧占位清单
+或 Player Tweaks DLL；仅通过 Native Release 目录按需安装官方插件。第三方文件安装
+继续保留安全检查与来源、权限确认。已经独立安装到全局 Plugins 目录的包不受影响。
 本地构建保留原 ID，便于复用已有插件贡献；标注“本地构建”，不声明 Native Release 官方来源。
 安装前展示文件路径、清单、权限与免责声明，安装时重新发现并检查所审阅 SHA256，
 通过现有包校验 / 安装器落盘。默认不启用，不修改游戏注入配置。
@@ -50,8 +55,10 @@
 本体贡献迁移版本：DLSS5 0.2.2、Shade 0.1.1、Player Tweaks 0.1.0。
 这些包通过 `hostExtensions` 携带路线、资源位置与功能声明；由新版 SSMT 中已注册
 provider 执行，不加载清单中的任意代码。Player Tweaks 的原神 Hook 作为辅助产物随包
-分发，崩铁只使用客户端设置后端，不注入该 DLL。迁移版本暂缓正式发布，测试包
-可由现有本地打包入口生成；打包成功不代表游戏内效果或长期稳定性已经验收。
+分发，崩铁只使用客户端设置后端，不注入该 DLL。Player Tweaks 不再有本体内置的
+虚拟安装记录或资源回退；两种后端都要求插件包已安装并对当前游戏启用。
+迁移版本暂缓正式发布，测试包可由现有本地打包入口生成；打包成功不代表游戏内效果
+或长期稳定性已经验收。
 
 `pack-official-plugins.ps1 -DevelopmentPluginId <ID> -LocalBuild` 为此本地管线保留 ID；
 不生成官方 Release 目录，也不发布。未加 `-LocalBuild` 的原有 dev ID 打包方式保持不变。
