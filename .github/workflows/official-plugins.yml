@@ -156,6 +156,51 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: 从已构建二进制制作独立开发测试插件包
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # 含 publish=false 的版本仅能作为 CI 调试产物；不会加入正式 Release 或官方插件目录。
+          & ./tools/stage-local-plugins.ps1 -NativeArtifactDirectory './dist/Release' -OutputDirectory './dist/dev-plugin-packages'
+          if (-not $?) { throw '制作独立开发测试插件包失败' }
+          $packages = @(Get-ChildItem -Path './dist/dev-plugin-packages' -Filter '*.ssmtpkg' -File)
+          "Development plugin packages: $($packages.Count) (Actions only, not official)" |
+            Out-File $env:GITHUB_STEP_SUMMARY -Append
+          $packages | Sort-Object Name | Format-Table Name,Length -AutoSize
+
+      - name: 开发测试插件包：DLSS5
+        uses: actions/upload-artifact@v4
+        with:
+          name: SSMT-DLSS5-development-packages
+          path: dist/dev-plugin-packages/ssmt.dlss5.integration-*.ssmtpkg
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: 开发测试插件包：Player Tweaks
+        uses: actions/upload-artifact@v4
+        with:
+          name: SSMT-Player-Tweaks-development-packages
+          path: dist/dev-plugin-packages/ssmt.player-tweaks-*.ssmtpkg
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: 开发测试插件包：HoYoShade
+        uses: actions/upload-artifact@v4
+        with:
+          name: SSMT-HoYoShade-development-packages
+          path: dist/dev-plugin-packages/ssmt.hoyoshade.bridge-*.ssmtpkg
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: 开发测试插件包：Poser（仅启用实验构建时）
+        if: ${{ inputs.build_poser }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: SSMT-Poser-development-packages
+          path: dist/dev-plugin-packages/ssmt.poser.genshin-probe-*.ssmtpkg
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: 保存全部编译产物（仅供测试）
         uses: actions/upload-artifact@v4
         with:
