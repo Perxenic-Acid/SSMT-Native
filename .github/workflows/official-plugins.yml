@@ -144,9 +144,9 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  upload:
+  publish:
     needs: build
-    if: ${{ github.event_name == 'release' || inputs.upload_to_release }}
+    if: ${{ inputs.release_mode == 'publish_new_release' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -154,16 +154,48 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: SSMT-Native-windows-x64
+          name: SSMT-Native-release-assets
           path: release-assets
-      - name: 上传到已有 Release
+
+      - name: 创建新 Release（成功上传全部资产后才公开）
         shell: bash
         run: |
           set -euo pipefail
-          gh release view "$RELEASE_TAG" >/dev/null
-          # 不覆盖已有同名资产，避免改变已分发插件的哈希。
-          gh release upload "$RELEASE_TAG" release-assets/*
+          if [[ "$GITHUB_REF" != 'refs/heads/main' ]]; then
+            echo 'Only the main branch can publish releases.' >&2
+            exit 1
+          fi
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists; refusing to overwrite it." >&2
+            exit 1
+          fi
+          # 防止 gh release create 复用已经存在但尚未发布的 tag。
+          if git ls-remote --exit-code --tags "https://github.com/$GH_REPO.git" "refs/tags/$RELEASE_TAG" >/dev/null; then
+            echo "Tag $RELEASE_TAG already exists; refusing to reuse it." >&2
+            exit 1
+          else
+            status=$?
+            if [[ "$status" -ne 2 ]]; then
+              echo "Could not verify remote tag availability (exit $status)." >&2
+              exit "$status"
+            fi
+          fi
+
+          shopt -s nullglob
+          assets=(release-assets/*)
+          for required in SSMT-Native-windows-x64.zip ssmt-plugin-catalog.json SHA256SUMS.txt; do
+            if [[ ! -f "release-assets/$required" ]]; then
+              echo "Missing required release asset: $required" >&2
+              exit 1
+            fi
+          done
+
+          # 创建草稿时一并上传完整资产；上传成功后才发布 Release。
+          gh release create "$RELEASE_TAG" "${assets[@]}" \
+            --target "$GITHUB_SHA" --title "$RELEASE_TAG" --generate-notes --draft
+          gh release edit "$RELEASE_TAG" --draft=false
+          echo "Published https://github.com/$GH_REPO/releases/tag/$RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"
