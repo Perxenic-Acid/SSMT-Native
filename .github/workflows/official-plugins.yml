@@ -252,12 +252,13 @@ jobs:
 
           shopt -s nullglob
           assets=(release-assets/*)
-          for required in SSMT-Native-windows-x64.zip ssmt-plugin-catalog.json SHA256SUMS.txt; do
-            if [[ ! -f "release-assets/$required" ]]; then
-              echo "Missing required release asset: $required" >&2
+          for required in Run.exe ssmt_plugin_host.dll SSMT-Native-windows-x64.zip ssmt-plugin-catalog.json SHA256SUMS.txt; do
+            if [[ ! -s "release-assets/$required" ]]; then
+              echo "Missing or empty required release asset: $required" >&2
               exit 1
             fi
           done
+          (cd release-assets && sha256sum --check SHA256SUMS.txt)
 
           # 创建草稿时一并上传完整资产；上传成功后才发布 Release。
           gh release create "$RELEASE_TAG" "${assets[@]}" \
