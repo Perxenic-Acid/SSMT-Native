@@ -3,9 +3,9 @@
 `official-plugin-packages/<插件 ID>/<版本>/` 是官方插件包的来源。Native Release 发布时，
 工作流独立构建所需 Native 产物，再运行 `tools/pack-official-plugins.ps1`，生成 `<ID>-<版本>.ssmtpkg`
 与 `ssmt-plugin-catalog.json` 并上传到同一 Release。
-版本目录中可放 `release-status.json` 并设置 `"publish": false` 暂缓发布。
-当前旧 DLSS5 Swapper 桥接版暂缓发布，避免把需要玩家手工准备外部 DLL 的路线
-当作 SSMT 自主管理资源的完成品。
+每个版本必须有 `release-status.json`，`"publish": true` 才会进入正式 Release。
+当前仓库所有 7 个版本均已允许发布，包括旧 DLSS5 Swapper 路线及 Poser。
+较旧版本的外部依赖与实验性限制仍需在安装说明中明确，不代表已获得完整游戏验收。
 
 目录中的清单只能声明该包实际提供的能力。外部依赖仍需由 SSMT 的图形资源管理器
 取得与安装；不能因为插件包发布成功，就把外部 DLSS5 DLL 标为已安装。
@@ -28,7 +28,7 @@
 
 原神运行时探针源码位于 `SSMT-Poser/`，已完成当前样本的 native resolver、Rig / Actor
 枚举和可见的单骨旋转 / 恢复；新增 VMD FK 旋转预览已通过本地测试，实机动作验证待完成。
-`release-status.json` 将研究版本排除在正式目录之外；不会随普通官方打包自动发布。
+Poser 已纳入正式发布：CI 必须构建、测试 `SSMT-Poser.dll`，并将其装入独立 `.ssmtpkg`。
 本地测试可使用 `-DevelopmentPluginId ssmt.poser.genshin-probe`，生成
 `dev.ssmt.poser.genshin-probe` 包并通过现有第三方包入口校验、确认、安装。
 开发包不生成官方目录，普通“从文件安装”仍拒绝未验证来源的 `ssmt.*` ID。
@@ -57,8 +57,8 @@
 provider 执行，不加载清单中的任意代码。Player Tweaks 的原神 Hook 作为辅助产物随包
 分发，崩铁只使用客户端设置后端，不注入该 DLL。Player Tweaks 不再有本体内置的
 虚拟安装记录或资源回退；两种后端都要求插件包已安装并对当前游戏启用。
-迁移版本暂缓正式发布，测试包可由现有本地打包入口生成；打包成功不代表游戏内效果
-或长期稳定性已经验收。
+迁移版本已经允许正式发布；每个版本作为独立的 `.ssmtpkg` 下载资产。
+打包成功不代表游戏内效果或长期稳定性已经验收。
 
 `pack-official-plugins.ps1 -DevelopmentPluginId <ID> -LocalBuild` 为此本地管线保留 ID；
 不生成官方 Release 目录，也不发布。未加 `-LocalBuild` 的原有 dev ID 打包方式保持不变。
