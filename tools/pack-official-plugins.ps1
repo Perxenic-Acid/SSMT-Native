@@ -141,8 +141,9 @@ foreach ($idDirectory in Get-ChildItem -LiteralPath $sourceRoot -Directory) {
             supportedPlatforms = @($manifest.compatibility.platforms)
             supportedGames = $games
             packageSize = $asset.Length
-            permissions = @($manifest.permissions)
-            externalDependencies = @($manifest.externalDependencies)
+            # 缺省可选数组必须输出 []，@($null) 会生成 [null] 并使客户端下载整个目录失败。
+            permissions = @($manifest.permissions | Where-Object { $null -ne $_ })
+            externalDependencies = @($manifest.externalDependencies | Where-Object { $null -ne $_ })
             bundledThirdPartyPayloads = @()
         }
     }
