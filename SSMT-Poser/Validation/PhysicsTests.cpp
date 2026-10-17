@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <cstring>
 #include <limits>
+#include <tuple>
 
 void PhysicsMotionOracle();
 void SkinSurfaceOracle();
@@ -128,7 +129,7 @@ bool TurningCloth(void* context,double seconds,std::span<physics::Pose> out) {
     }return true;
 }
 void PlayerGirlAmice() {
-    const auto& fixture=validation::PlayerGirlAmice;std::array<physics::InputBone,fixture.size()> bones{};
+    const auto& fixture=validation::PlayerGirlAmice;std::array<physics::InputBone,std::tuple_size_v<decltype(validation::PlayerGirlAmice)>> bones{};
     for(unsigned i=0;i<fixture.size();++i) {
         reference::Pose rest;Check(reference::Decode(fixture[i].inverse,rest),"PlayerGirl Amice bind decode failed");
         bones[i]={fixture[i].name,fixture[i].parent,{rest.position,rest.rotation},i?fixture[i].local:rest.position,true,i==0};
