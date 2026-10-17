@@ -1,0 +1,2 @@
+# Bridge patches must retain LF on Windows; upstream source archives use LF.
+SSMT-Gimi-Bridge/*.patch text eol=lf
