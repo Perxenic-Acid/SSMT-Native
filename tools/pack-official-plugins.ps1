@@ -24,9 +24,14 @@ foreach ($idDirectory in Get-ChildItem -LiteralPath $sourceRoot -Directory) {
     }
     foreach ($versionDirectory in Get-ChildItem -LiteralPath $idDirectory.FullName -Directory) {
         $releaseStatusPath = Join-Path $versionDirectory.FullName 'release-status.json'
-        if (Test-Path -LiteralPath $releaseStatusPath -PathType Leaf) {
+        # 正式目录严格采用显式白名单；没有状态文件的旧插件同样不得发布。
+        # 显式开发打包由 -DevelopmentPluginId 选择，不改变正式发布资格。
+        if (-not $DevelopmentPluginId) {
+            if (-not (Test-Path -LiteralPath $releaseStatusPath -PathType Leaf)) {
+                continue
+            }
             $releaseStatus = Get-Content -LiteralPath $releaseStatusPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            if ($releaseStatus.publish -eq $false -and -not $DevelopmentPluginId) {
+            if ($releaseStatus.publish -isnot [bool] -or -not $releaseStatus.publish) {
                 continue
             }
         }
