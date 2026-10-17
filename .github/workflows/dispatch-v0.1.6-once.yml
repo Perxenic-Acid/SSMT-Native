@@ -1,0 +1,35 @@
+# 一次性调度器：利用受限 GitHub 连接的仓库写入能力触发正式 workflow_dispatch。
+# 此文件只对它自身在 main 上的变更作出响应；使用后删除。
+name: Dispatch SSMT Native v0.1.6 once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/dispatch-v0.1.6-once.yml
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    if: ${{ github.repository == 'Perxenic-Acid/SSMT-Native' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Request vetted official publishing workflow
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if gh release view v0.1.6 >/dev/null 2>&1; then
+            echo 'v0.1.6 already exists, will not dispatch a duplicate release.' >&2
+            exit 1
+          fi
+          gh workflow run official-plugins.yml --ref main \
+            -f release_mode=publish_new_release \
+            -f release_tag=v0.1.6
+          echo 'Requested official-plugins.yml: publish_new_release / v0.1.6' >> "$GITHUB_STEP_SUMMARY"
