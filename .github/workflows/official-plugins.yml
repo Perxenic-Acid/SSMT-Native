@@ -93,30 +93,56 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ctest --test-dir build-poser -C Release --output-on-failure --no-tests=error
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: 打包官方插件和目录
+      - name: 筛选获准插件并打包正式发布文件
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           ./tools/pack-official-plugins.ps1 -ReleaseTag $env:RELEASE_TAG
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $catalog = Get-Content dist/plugin-release/ssmt-plugin-catalog.json -Raw | ConvertFrom-Json
+          $assetsDir = 'dist/plugin-release'
+          $catalog = Get-Content "$assetsDir/ssmt-plugin-catalog.json" -Raw | ConvertFrom-Json
           $count = @($catalog.entries).Count
-          "Plugin catalog entries: $count" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          "Approved plugin versions: $count (requires release-status.json publish=true)" |
+            Out-File $env:GITHUB_STEP_SUMMARY -Append
           if ($count -eq 0) {
-            Write-Warning '没有可发布插件：请检查 release-status.json。暂缓发布标记不会被覆盖。'
-            if ($env:PUBLISH_ASSETS -eq 'true') { throw '拒绝向 Release 上传空插件目录' }
+            Write-Warning '目前没有显式批准发布的插件；Native 核心仍可独立发布。'
           }
-          Compress-Archive -Path dist/Release/* -DestinationPath dist/plugin-release/SSMT-Native-windows-x64.zip
-          Get-ChildItem dist/plugin-release -File | Where-Object Name -ne SHA256SUMS.txt | ForEach-Object {
-            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$hash  $($_.Name)"
-          } | Set-Content dist/plugin-release/SHA256SUMS.txt -Encoding utf8
-      - name: 保留构建产物
+
+          # 发布核心与测试二进制分离，防止暂缓发布的 Player Tweaks / Bridge / Poser 被打包进 Release。
+          $coreDir = Join-Path $env:RUNNER_TEMP 'ssmt-native-core'
+          New-Item -ItemType Directory -Path $coreDir -Force | Out-Null
+          foreach ($filename in @('Run.exe', 'ssmt_plugin_host.dll')) {
+            $source = Join-Path 'dist/Release' $filename
+            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+              throw "缺少 Native 核心产物：$source"
+            }
+            Copy-Item -LiteralPath $source -Destination $coreDir -ErrorAction Stop
+          }
+          Compress-Archive -Path "$coreDir/*" -DestinationPath "$assetsDir/SSMT-Native-windows-x64.zip"
+
+          Get-ChildItem -LiteralPath $assetsDir -File |
+            Where-Object Name -ne 'SHA256SUMS.txt' |
+            Sort-Object Name |
+            ForEach-Object {
+              $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              "$hash  $($_.Name)"
+            } | Set-Content "$assetsDir/SHA256SUMS.txt" -Encoding utf8
+
+      - name: 保存正式发布候选文件（Actions Artifact）
         uses: actions/upload-artifact@v4
         with:
-          name: SSMT-Native-windows-x64
+          name: SSMT-Native-release-assets
           path: dist/plugin-release/
           if-no-files-found: error
           retention-days: 14
+
+      - name: 保存全部编译产物（仅供测试）
+        uses: actions/upload-artifact@v4
+        with:
+          name: SSMT-Native-test-binaries
+          path: dist/Release/
+          if-no-files-found: error
+          retention-days: 7
 
   upload:
     needs: build
