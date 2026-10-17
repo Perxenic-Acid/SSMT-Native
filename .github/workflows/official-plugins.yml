@@ -16,10 +16,6 @@ on:
         required: false
         default: ''
         type: string
-      build_poser:
-        description: '额外构建并测试 Poser，测试产物不会进入正式发布包'
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -83,8 +79,7 @@ jobs:
           # CameraZoomTests 需要仓库未提供的游戏证据样本，仅构建、不运行。
           'CameraZoomTests: built, not run (external evidence fixtures unavailable).' | Out-File $env:GITHUB_STEP_SUMMARY -Append
           Copy-Item target/release/ssmt_plugin_host.dll dist/Release/
-      - name: 验证可选 Poser 实验插件
-        if: ${{ inputs.build_poser }}
+      - name: 构建并测试 Poser（正式插件依赖，必须成功）
         shell: pwsh
         run: |
           cmake -S SSMT-Poser -B build-poser -A x64
@@ -108,10 +103,14 @@ jobs:
           "Approved plugin versions: $count (requires release-status.json publish=true)" |
             Out-File $env:GITHUB_STEP_SUMMARY -Append
           if ($count -eq 0) {
-            Write-Warning '目前没有显式批准发布的插件；Native 核心仍可独立发布。'
+            throw '没有任何插件进入发布目录：请核对 release-status.json 与打包脚本'
+          }
+          $packages = @(Get-ChildItem -LiteralPath $assetsDir -Filter '*.ssmtpkg' -File)
+          if ($packages.Count -ne $count) {
+            throw "插件目录记录数 $count 与包数量 $($packages.Count) 不一致"
           }
 
-          # 发布核心与测试二进制分离，防止暂缓发布的 Player Tweaks / Bridge / Poser 被打包进 Release。
+          # 核心运行时与可按需下载的独立 .ssmtpkg 插件分开发布；各插件 DLL 在对应包内。
           $coreDir = Join-Path $env:RUNNER_TEMP 'ssmt-native-core'
           New-Item -ItemType Directory -Path $coreDir -Force | Out-Null
           foreach ($filename in @('Run.exe', 'ssmt_plugin_host.dll')) {
@@ -156,52 +155,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: 从已构建二进制制作独立开发测试插件包
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          # 含 publish=false 的版本仅能作为 CI 调试产物；不会加入正式 Release 或官方插件目录。
-          & ./tools/stage-local-plugins.ps1 -NativeArtifactDirectory './dist/Release' -OutputDirectory './dist/dev-plugin-packages'
-          if (-not $?) { throw '制作独立开发测试插件包失败' }
-          $packages = @(Get-ChildItem -Path './dist/dev-plugin-packages' -Filter '*.ssmtpkg' -File)
-          "Development plugin packages: $($packages.Count) (Actions only, not official)" |
-            Out-File $env:GITHUB_STEP_SUMMARY -Append
-          $packages | Sort-Object Name | Format-Table Name,Length -AutoSize
-
-      - name: 开发测试插件包：DLSS5
-        uses: actions/upload-artifact@v4
-        with:
-          name: SSMT-DLSS5-development-packages
-          path: dist/dev-plugin-packages/ssmt.dlss5.integration-*.ssmtpkg
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: 开发测试插件包：Player Tweaks
-        uses: actions/upload-artifact@v4
-        with:
-          name: SSMT-Player-Tweaks-development-packages
-          path: dist/dev-plugin-packages/ssmt.player-tweaks-*.ssmtpkg
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: 开发测试插件包：HoYoShade
-        uses: actions/upload-artifact@v4
-        with:
-          name: SSMT-HoYoShade-development-packages
-          path: dist/dev-plugin-packages/ssmt.hoyoshade.bridge-*.ssmtpkg
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: 开发测试插件包：Poser（仅启用实验构建时）
-        if: ${{ inputs.build_poser }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: SSMT-Poser-development-packages
-          path: dist/dev-plugin-packages/ssmt.poser.genshin-probe-*.ssmtpkg
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: 保存全部编译产物（仅供测试）
+      - name: 保存全部编译产物（仅供排错，不取代独立插件包）
         uses: actions/upload-artifact@v4
         with:
           name: SSMT-Native-test-binaries
