@@ -1,43 +1,136 @@
-name: Publish official SSMT plugins
+name: Build and publish SSMT Native
 
 on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: '打包使用的标签；上传时必须是已有 Release 的标签'
+        required: true
+        default: manual-build
+        type: string
+      upload_to_release:
+        description: '验证通过后上传到已有 Release（不创建或发布 Release）'
+        default: false
+        type: boolean
+      build_poser:
+        description: '额外构建并测试实验性 Poser（仍遵守暂缓发布标记）'
+        default: false
+        type: boolean
   release:
     types: [published]
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: native-${{ github.workflow }}-${{ github.event.release.tag_name || inputs.release_tag }}
+  cancel-in-progress: false
 
 jobs:
-  plugin-assets:
-    runs-on: windows-latest
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+      PUBLISH_ASSETS: ${{ github.event_name == 'release' || inputs.upload_to_release }}
     steps:
       - uses: actions/checkout@v4
-      - name: 构建独立插件所需的 Native 产物
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: 校验标签与构建提交
         shell: pwsh
         run: |
-          cmake -S . -B build-native -A x64 -DSSMT_BUILD_PLAYER_TWEAKS=ON -DSSMT_BUILD_GIMI_BRIDGE=ON -DSSMT_BUILD_POSER_PROBE=OFF
+          if ($env:RELEASE_TAG -notmatch '^[A-Za-z0-9._-]+$') {
+            throw '标签只允许字母、数字、点、下划线及连字符'
+          }
+          if ($env:PUBLISH_ASSETS -eq 'true') {
+            $tagCommit = git rev-parse --verify "refs/tags/$($env:RELEASE_TAG)^{commit}"
+            if ($LASTEXITCODE -ne 0) { throw '上传前必须先创建标签及 Release' }
+            $headCommit = git rev-parse HEAD
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if ($tagCommit -ne $headCommit) { throw 'Release 标签与本次选择的构建提交不一致' }
+          }
+      - name: 安装 Rust 工具链
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.96.0 --profile minimal
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build build-native --config Release --target DeploySSMTNative DeployGimiBridge --parallel
+      - name: 构建 Rust 工作区并验证插件 ABI
+        shell: pwsh
+        run: |
+          cargo +1.96.0 build --locked --workspace --release -j 4
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: 验证原神 Poser 实验插件
+          cargo +1.96.0 run --locked --release -p ssmt-host-probe --bin abi-query -- target/release/ssmt_test_plugin.dll
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: 构建 Native 与 Bridge
+        shell: pwsh
+        run: |
+          cmake -S . -B build-release -A x64 -DSSMT_BUILD_GIMI_BRIDGE=ON -DSSMT_BUILD_POSER_PROBE=OFF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build-release --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./build-release/SSMT-Player-Tweaks/Release/CameraPolicyTests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # CameraZoomTests 需要仓库未提供的游戏证据样本，仅构建、不运行。
+          'CameraZoomTests: built, not run (external evidence fixtures unavailable).' | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          Copy-Item target/release/ssmt_plugin_host.dll dist/Release/
+      - name: 验证可选 Poser 实验插件
+        if: ${{ inputs.build_poser }}
         shell: pwsh
         run: |
           cmake -S SSMT-Poser -B build-poser -A x64
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build build-poser --config Release --target SSMT-Poser PoserProbeTests --parallel
+          # 构建实际存在的全部目标，避免要求被忽略的本机 Tests/ 源码。
+          cmake --build build-poser --config Release --parallel 4
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ctest --test-dir build-poser -C Release --output-on-failure
+          ctest --test-dir build-poser -C Release --output-on-failure --no-tests=error
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: 打包官方插件和目录
         shell: pwsh
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: ./tools/pack-official-plugins.ps1 -ReleaseTag $env:RELEASE_TAG
-      - name: 上传 Native Release 资产
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          $assets = @(Get-ChildItem -LiteralPath dist/plugin-release -File | ForEach-Object FullName)
-          gh release upload $env:RELEASE_TAG @assets
+          ./tools/pack-official-plugins.ps1 -ReleaseTag $env:RELEASE_TAG
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $catalog = Get-Content dist/plugin-release/ssmt-plugin-catalog.json -Raw | ConvertFrom-Json
+          $count = @($catalog.entries).Count
+          "Plugin catalog entries: $count" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          if ($count -eq 0) {
+            Write-Warning '没有可发布插件：请检查 release-status.json。暂缓发布标记不会被覆盖。'
+            if ($env:PUBLISH_ASSETS -eq 'true') { throw '拒绝向 Release 上传空插件目录' }
+          }
+          Compress-Archive -Path dist/Release/* -DestinationPath dist/plugin-release/SSMT-Native-windows-x64.zip
+          Get-ChildItem dist/plugin-release -File | Where-Object Name -ne SHA256SUMS.txt | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          } | Set-Content dist/plugin-release/SHA256SUMS.txt -Encoding utf8
+      - name: 保留构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: SSMT-Native-windows-x64
+          path: dist/plugin-release/
+          if-no-files-found: error
+          retention-days: 14
+
+  upload:
+    needs: build
+    if: ${{ github.event_name == 'release' || inputs.upload_to_release }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: SSMT-Native-windows-x64
+          path: release-assets
+      - name: 上传到已有 Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release view "$RELEASE_TAG" >/dev/null
+          # 不覆盖已有同名资产，避免改变已分发插件的哈希。
+          gh release upload "$RELEASE_TAG" release-assets/*
