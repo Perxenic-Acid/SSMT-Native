@@ -50,9 +50,10 @@ jobs:
             if ($env:RELEASE_TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
               throw '新 Release 标签应为 v主版本.次版本.修订号，例如 v0.1.2'
             }
-            git show-ref --verify --quiet "refs/tags/$env:RELEASE_TAG"
-            if ($LASTEXITCODE -eq 0) { throw "标签已存在：$env:RELEASE_TAG" }
-            if ($LASTEXITCODE -ne 1) { throw 'Git 标签检查失败' }
+            # git tag --list 对“不存在”返回成功且输出空列表，避免保留非零 LASTEXITCODE。
+            $matchingTags = @(git tag --list "$env:RELEASE_TAG")
+            if ($LASTEXITCODE -ne 0) { throw 'Git 标签检查失败' }
+            if ($matchingTags.Count -ne 0) { throw "标签已存在：$env:RELEASE_TAG" }
           } elseif ($env:RELEASE_MODE -ne 'build_only') {
             throw "未知操作模式：$env:RELEASE_MODE"
           }
