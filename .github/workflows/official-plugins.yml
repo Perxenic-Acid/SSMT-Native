@@ -3,27 +3,29 @@ name: Build and publish SSMT Native
 on:
   workflow_dispatch:
     inputs:
-      release_tag:
-        description: '打包使用的标签；上传时必须是已有 Release 的标签'
+      release_mode:
+        description: '操作：仅构建测试，或验证通过后创建全新 GitHub Release'
         required: true
-        default: manual-build
+        default: build_only
+        type: choice
+        options:
+          - build_only
+          - publish_new_release
+      release_tag:
+        description: '仅发布新 Release 时必填，例如 v0.1.2（不能使用已存在的标签）'
+        required: false
+        default: ''
         type: string
-      upload_to_release:
-        description: '验证通过后上传到已有 Release（不创建或发布 Release）'
-        default: false
-        type: boolean
       build_poser:
-        description: '额外构建并测试实验性 Poser（仍遵守暂缓发布标记）'
+        description: '额外构建并测试 Poser，测试产物不会进入正式发布包'
         default: false
         type: boolean
-  release:
-    types: [published]
 
 permissions:
   contents: read
 
 concurrency:
-  group: native-${{ github.workflow }}-${{ github.event.release.tag_name || inputs.release_tag }}
+  group: native-${{ github.workflow }}-${{ inputs.release_mode == 'publish_new_release' && inputs.release_tag || github.run_id }}
   cancel-in-progress: false
 
 jobs:
@@ -31,26 +33,31 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 60
     env:
-      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
-      PUBLISH_ASSETS: ${{ github.event_name == 'release' || inputs.upload_to_release }}
+      RELEASE_MODE: ${{ inputs.release_mode }}
+      RELEASE_TAG: ${{ inputs.release_mode == 'publish_new_release' && inputs.release_tag || format('ci-{0}', github.run_id) }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: 校验标签与构建提交
+      - name: 校验操作模式及新版本标签
         shell: pwsh
         run: |
-          if ($env:RELEASE_TAG -notmatch '^[A-Za-z0-9._-]+$') {
-            throw '标签只允许字母、数字、点、下划线及连字符'
+          if ($env:RELEASE_MODE -eq 'publish_new_release') {
+            if ($env:GITHUB_REF -ne 'refs/heads/main') {
+              throw '只能从 main 分支发布正式 Release'
+            }
+            if ($env:RELEASE_TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
+              throw '新 Release 标签应为 v主版本.次版本.修订号，例如 v0.1.2'
+            }
+            git show-ref --verify --quiet "refs/tags/$env:RELEASE_TAG"
+            if ($LASTEXITCODE -eq 0) { throw "标签已存在：$env:RELEASE_TAG" }
+            if ($LASTEXITCODE -ne 1) { throw 'Git 标签检查失败' }
+          } elseif ($env:RELEASE_MODE -ne 'build_only') {
+            throw "未知操作模式：$env:RELEASE_MODE"
           }
-          if ($env:PUBLISH_ASSETS -eq 'true') {
-            $tagCommit = git rev-parse --verify "refs/tags/$($env:RELEASE_TAG)^{commit}"
-            if ($LASTEXITCODE -ne 0) { throw '上传前必须先创建标签及 Release' }
-            $headCommit = git rev-parse HEAD
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            if ($tagCommit -ne $headCommit) { throw 'Release 标签与本次选择的构建提交不一致' }
-          }
+          "Mode: $env:RELEASE_MODE; tag: $env:RELEASE_TAG; sha: $env:GITHUB_SHA" |
+            Out-File $env:GITHUB_STEP_SUMMARY -Append
       - name: 安装 Rust 工具链
         shell: pwsh
         run: |
