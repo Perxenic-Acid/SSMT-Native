@@ -1,4 +1,3 @@
 {
-  "publish": false,
-  "reason": "本体贡献迁移版本，完成独立包与游戏设置回归后发布。"
+  "publish": true
 }
