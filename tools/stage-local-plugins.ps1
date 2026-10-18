@@ -14,24 +14,24 @@ $temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) ('ssmt-local-plugins-' + [
 try {
     foreach ($plugin in Get-ChildItem -LiteralPath $sourceRoot -Directory) {
         if ($ExcludePluginId -contains $plugin.Name) { continue }
-        $manifests = @(Get-ChildItem -LiteralPath $plugin.FullName -Directory | ForEach-Object {
-            Get-Content -LiteralPath (Join-Path $_.FullName 'ssmt-plugin.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-        })
-        # 未构建的可选目标不生成不完整插件包；纯本体 / 外部工具插件无需 DLL。
-        $missing = @($manifests | ForEach-Object { $_.contributions.runtimePlugins } | Where-Object {
-            $null -ne $_ -and -not (Test-Path -LiteralPath (Join-Path $artifactRoot ([IO.Path]::GetFileName($_.path))) -PathType Leaf)
-        })
-        $missing += @(Get-ChildItem -LiteralPath $plugin.FullName -Directory | ForEach-Object {
-            $buildArtifactsPath = Join-Path $_.FullName 'build-artifacts.json'
+        foreach ($version in Get-ChildItem -LiteralPath $plugin.FullName -Directory) {
+            $manifest = Get-Content -LiteralPath (Join-Path $version.FullName 'ssmt-plugin.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+            # 未构建的可选目标不生成不完整插件包；纯本体 / 外部工具插件无需 DLL。
+            $missing = @($manifest.contributions.runtimePlugins | Where-Object {
+                $null -ne $_ -and -not (Test-Path -LiteralPath (Join-Path $artifactRoot ([IO.Path]::GetFileName($_.path))) -PathType Leaf)
+            })
+            $buildArtifactsPath = Join-Path $version.FullName 'build-artifacts.json'
             if (Test-Path -LiteralPath $buildArtifactsPath -PathType Leaf) {
-                (Get-Content -LiteralPath $buildArtifactsPath -Raw -Encoding UTF8 | ConvertFrom-Json).files | Where-Object {
+                $missing += @((Get-Content -LiteralPath $buildArtifactsPath -Raw -Encoding UTF8 | ConvertFrom-Json).files | Where-Object {
                     -not (Test-Path -LiteralPath (Join-Path $artifactRoot $_.source) -PathType Leaf)
-                }
+                })
             }
-        })
-        if ($missing.Count) { Write-Warning "跳过尚未构建的插件：$($plugin.Name)"; continue }
-        & (Join-Path $PSScriptRoot 'pack-official-plugins.ps1') -ReleaseTag local-build `
-            -DevelopmentPluginId $plugin.Name -LocalBuild -NativeArtifactDirectory $artifactRoot -OutputDirectory $temporaryRoot | Out-Null
+            # 新版本增加辅助组件时，只跳过该版本，已构建的其他版本仍可用于本地验证。
+            if ($missing.Count) { Write-Warning "跳过尚未构建的插件：$($plugin.Name) $($version.Name)"; continue }
+            & (Join-Path $PSScriptRoot 'pack-official-plugins.ps1') -ReleaseTag local-build `
+                -DevelopmentPluginId $plugin.Name -PluginVersion $version.Name -LocalBuild `
+                -NativeArtifactDirectory $artifactRoot -OutputDirectory $temporaryRoot | Out-Null
+        }
     }
     foreach ($package in Get-ChildItem -LiteralPath $temporaryRoot -Filter '*.ssmtpkg' -File) {
         Copy-Item -LiteralPath $package.FullName -Destination (Join-Path $outputRoot $package.Name) -Force

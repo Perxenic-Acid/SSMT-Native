@@ -1,0 +1,10 @@
+{
+  "files": [
+    { "source": "SSMT-Gimi-Bridge.dll", "destination": "bridge/Dx11FsrBridge.dll" },
+    { "source": "SSMT-Gimi-Bridge-LICENSE.txt", "destination": "bridge/LICENSE.txt" },
+    { "source": "SSMT-OptiScaler.dll", "destination": "optiscaler/OptiScaler.dll" },
+    { "source": "SSMT-OptiScaler-LICENSE.txt", "destination": "optiscaler/LICENSE.txt" },
+    { "source": "SSMT-OptiScaler-source.json", "destination": "optiscaler/source.json" },
+    { "source": "SSMT-OptiScaler-THIRD_PARTY_NOTICES.txt", "destination": "optiscaler/THIRD_PARTY_NOTICES.txt" }
+  ]
+}

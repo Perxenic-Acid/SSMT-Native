@@ -1,0 +1,7 @@
+OptiScaler: GPL-3.0，版权及完整许可证见本目录 LICENSE.txt。
+SSMT 汉化及现用 GIMI 适配源码：
+https://github.com/Perxenic-Acid/OptiScaler_DLSSNR/tree/05322084236dc505f4ea8df29720c3a213d5f4d3
+构建提交、大小及哈希见 source.json。Windows 中文字体由运行时读取，不随包分发。
+
+此辅助组件仅用于原神 FSR2 Bridge 路线；其他游戏和 Feeder 路线保持各自组件。
+仅通过 SSMT 自有目录热注入，不将代理 DLL 复制到游戏目录。

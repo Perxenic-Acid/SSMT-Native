@@ -27,7 +27,7 @@ concurrency:
 jobs:
   build:
     runs-on: windows-2022
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       RELEASE_MODE: ${{ inputs.release_mode }}
       RELEASE_TAG: ${{ inputs.release_mode == 'publish_new_release' && inputs.release_tag || format('ci-{0}', github.run_id) }}
@@ -89,6 +89,28 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ctest --test-dir build-poser -C Release --output-on-failure --no-tests=error
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: 读取固定 OptiScaler 源码版本
+        id: optiscaler
+        shell: pwsh
+        run: |
+          $pin = Get-Content tools/sources/optiscaler.json -Raw | ConvertFrom-Json
+          if ($pin.repository -cne 'Perxenic-Acid/OptiScaler_DLSSNR' -or $pin.revision -notmatch '^[0-9a-f]{40}$') {
+            throw 'OptiScaler 固定来源声明无效'
+          }
+          "revision=$($pin.revision)" | Out-File $env:GITHUB_OUTPUT -Append
+      - name: 验证插件版本隔离与打包完整性
+        shell: pwsh
+        run: ./tools/tests/test-official-packaging.ps1
+      - uses: actions/checkout@v4
+        with:
+          repository: Perxenic-Acid/OptiScaler_DLSSNR
+          ref: ${{ steps.optiscaler.outputs.revision }}
+          path: build/optiscaler-source
+          submodules: recursive
+          persist-credentials: false
+      - name: 构建汉化 OptiScaler 并执行无图形设备回归
+        shell: pwsh
+        run: ./tools/build-optiscaler.ps1 -SourceDirectory ./build/optiscaler-source
       - name: 筛选获准插件并打包正式发布文件
         shell: pwsh
         run: |

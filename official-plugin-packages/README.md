@@ -4,7 +4,7 @@
 工作流独立构建所需 Native 产物，再运行 `tools/pack-official-plugins.ps1`，生成 `<ID>-<版本>.ssmtpkg`
 与 `ssmt-plugin-catalog.json` 并上传到同一 Release。
 每个版本必须有 `release-status.json`，`"publish": true` 才会进入正式 Release。
-当前仓库所有 7 个版本均已允许发布，包括旧 DLSS5 Swapper 路线及 Poser。
+各版本的发布资格以状态文件为准，包括旧 DLSS5 Swapper 路线及 Poser。
 较旧版本的外部依赖与实验性限制仍需在安装说明中明确，不代表已获得完整游戏验收。
 
 目录中的清单只能声明该包实际提供的能力。外部依赖仍需由 SSMT 的图形资源管理器
@@ -65,3 +65,24 @@ provider 执行，不加载清单中的任意代码。Player Tweaks 的原神 Ho
 
 `pack-official-plugins.ps1 -DevelopmentPluginId <ID> -LocalBuild` 为此本地管线保留 ID；
 不生成官方 Release 目录，也不发布。未加 `-LocalBuild` 的原有 dev ID 打包方式保持不变。
+
+## 原神 OptiScaler 中文面板
+
+DLSS5 0.2.3 携带汉化 OptiScaler 辅助组件。源码与固定提交见
+`tools/sources/optiscaler.json`；保留现用 GIMI 补丁，不切换渲染后端。
+Native CI 检出固定源码、运行无图形设备的界面回归并编译，再把 DLL、GPL 许可证、
+第三方声明及来源记录装入该插件包。发布前必须先将固定提交推送到公开 fork，
+让消费者可取得相应源码；CI 无法检出该提交时应失败，不回退到最新分支或旧 DLL。
+
+本地开发按顺序执行（仅构建组件，不安装到游戏目录）：
+
+```powershell
+./tools/build-optiscaler.ps1 -SourceDirectory C:/path/to/OptiScaler_DLSSNR
+./tools/stage-local-plugins.ps1 -NativeArtifactDirectory ./dist/Release -OutputDirectory ../build/plugin-packages
+```
+
+本地发现按版本检查产物，未构建 OptiScaler 时仅跳过 0.2.3，不屏蔽已有的旧版本。
+正式打包仍要求所有获准版本的辅助产物完整。打包回归入口为
+`tools/tests/test-official-packaging.ps1`。
+新版 SSMT 只在已安装且为原神启用该插件时，将汉化组件暂存到自有热注入目录；
+其他游戏及 Feeder 路线不受此 DLL 影响。旧插件继续原组件，完整游戏内效果待实机验收。

@@ -6,11 +6,14 @@
     [string]$NativeArtifactDirectory = (Join-Path $PSScriptRoot '..\dist\Release'),
     [ValidatePattern('^[A-Za-z0-9._-]+$')]
     [string]$DevelopmentPluginId,
+    [ValidatePattern('^[A-Za-z0-9._-]+$')]
+    [string]$PluginVersion,
     [switch]$LocalBuild
 )
 
 $ErrorActionPreference = 'Stop'
 if ($LocalBuild -and -not $DevelopmentPluginId) { throw '本地构建必须明确指定插件 ID' }
+if ($PluginVersion -and -not $DevelopmentPluginId) { throw '按版本筛选仅用于显式开发打包，正式发布仍打包全部获准版本' }
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $sourceRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\official-plugin-packages'))
@@ -23,6 +26,7 @@ foreach ($idDirectory in Get-ChildItem -LiteralPath $sourceRoot -Directory) {
         continue
     }
     foreach ($versionDirectory in Get-ChildItem -LiteralPath $idDirectory.FullName -Directory) {
+        if ($PluginVersion -and $versionDirectory.Name -cne $PluginVersion) { continue }
         $releaseStatusPath = Join-Path $versionDirectory.FullName 'release-status.json'
         # 正式目录严格采用显式白名单；没有状态文件的旧插件同样不得发布。
         # 显式开发打包由 -DevelopmentPluginId 选择，不改变正式发布资格。
