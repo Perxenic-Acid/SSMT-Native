@@ -16,6 +16,9 @@ struct LoaderOptions
     bool preload_runtime = false;
     bool direct_injection = false;
     bool wait_for_target = false;
+    bool launch_with_parent = false;
+    std::optional<std::filesystem::path> launch_parent;
+    std::optional<std::wstring> target_arguments;
     std::vector<std::pair<std::wstring, std::optional<std::wstring>>> environment;
     unsigned long process_timeout_ms = 120000;
     std::optional<std::wstring> launch_barrier_id;
@@ -93,6 +96,21 @@ inline LoaderOptions ParseLoaderOptions(
             options.wait_for_target = true;
             continue;
         }
+        if (arg == L"--launch-parent")
+        {
+            if (i + 1 >= argc)
+                throw std::runtime_error("--launch-parent requires a path");
+            options.launch_parent = std::filesystem::path{argv[++i]};
+            options.launch_with_parent = true;
+            continue;
+        }
+        if (arg == L"--target-args")
+        {
+            if (i + 1 >= argc)
+                throw std::runtime_error("--target-args requires an argument string");
+            options.target_arguments = std::wstring{argv[++i]};
+            continue;
+        }
         if (arg == L"--process-timeout")
         {
             if (i + 1 >= argc)
@@ -129,5 +147,12 @@ inline LoaderOptions ParseLoaderOptions(
 
     if (!options.environment.empty() && options.direct_injection)
         throw std::runtime_error("Environment requires a newly launched target");
+    if (options.launch_with_parent)
+    {
+        if (!options.direct_injection)
+            throw std::runtime_error("--launch-parent requires --inject-mode direct");
+        if (!options.launch_parent)
+            throw std::runtime_error("--launch-parent requires a launcher path");
+    }
     return options;
 }
