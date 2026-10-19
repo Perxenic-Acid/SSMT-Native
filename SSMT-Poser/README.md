@@ -52,7 +52,7 @@ method descriptor 的 class、metadata ID、参数数量和代码入口必须匹
 
 ```powershell
 cmake -S SSMT-Poser -B build-poser -A x64
-cmake --build build-poser --config Release --target SSMT-Poser PoserProbeTests PoserUiTests PoserLegIKTests PoserPhysicsTests PoserPhysicsUiTests --parallel
+cmake --build build-poser --config Release --target SSMT-Poser PoserPluginVersionTests PoserProbeTests PoserUiTests PoserLegIKTests PoserPhysicsTests PoserPhysicsUiTests --parallel
 ctest --test-dir build-poser -C Release --output-on-failure
 ./tools/pack-official-plugins.ps1 -ReleaseTag v-test -DevelopmentPluginId ssmt.poser.genshin-probe -OutputDirectory ./dist/poser-dev-packages
 ```
@@ -62,10 +62,20 @@ DLL 默认复制到 `dist/Release/SSMT-Poser.dll`。可以用
 `-NativeArtifactDirectory`。输出目录必须为空。测试启动先复制 DLL 到隔离目录，
 避免游戏占用构建产物。
 
-包 ID 保持 `ssmt.poser.genshin-probe` / 0.1.0。官方包只能通过 Native Release
+包 ID 保持 `ssmt.poser.genshin-probe`，当前包版本为 `0.1.1`。DLL 的 ABI 查询版本自动读取
+最高获准发布的包清单；更新时新增版本目录，不能只修改 Native Release 标签。
+`0.1.0` 不再重打或进入新的发布目录。
+官方包只能通过 Native Release
 来源、目录、大小与哈希校验安装。开发包使用 `dev.ssmt.poser.genshin-probe`，
 走现有本地第三方包确认入口。DLL 不会自动安装到用户插件库或修改启用设置。
 主 CMake 的 `SSMT_BUILD_POSER_PROBE` 默认关闭，不构建 SSMT 发行包。
+
+正式发布前，CI 将 `release-status.json` 中的 `sourcePaths` 与 GitHub 最新正式 Release
+标签比较。源码、共享 MinHook 或包清单改变却未升级包版本时直接失败；首次安装、市场刷新
+及主应用构建都不会把本地 DLL 自动覆盖到玩家插件目录。发布后在插件市场刷新，已安装
+`0.1.0` 的玩家会看到 `0.1.1` 更新按钮；关闭游戏后更新，下一次启动使用新包。
+`Validation/PluginVersionTests.cpp` 在独立进程验证实际 DLL 的 ABI 查询版本与包版本一致，
+不启动游戏、不调用插件初始化；即使可选本机测试源码缺失，CI 仍构建并执行此项。
 
 ## 实机采集
 

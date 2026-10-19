@@ -430,7 +430,7 @@ void AbiTests(const wchar_t* path) {
     Require(query(2, &info, &api) == Ok, "full ABI rejected");
     Require(api.struct_size == sizeof(PluginApi) && info.struct_size == sizeof(PluginInfo), "caller capacity changed");
     Require(api.initialize && api.shutdown && !api.on_present && !api.on_d3d11_ready, "unexpected callback table");
-    Require(std::strcmp(info.version, "0.1.0") == 0, "plugin version mismatch");
+    Require(std::strcmp(info.version, SSMT_POSER_VERSION) == 0, "plugin version mismatch");
     Require(query(1, &info, &api) == UnsupportedAbi, "wrong ABI accepted");
     Require(query(2, nullptr, &api) == InvalidArgument, "null info accepted");
     api.struct_size = 23;

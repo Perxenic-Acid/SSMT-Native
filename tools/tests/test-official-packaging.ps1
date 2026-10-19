@@ -13,6 +13,8 @@ try {
     foreach ($version in @('0.2.2', '0.2.3')) {
         Copy-Item -LiteralPath (Join-Path $nativeRoot "official-plugin-packages/ssmt.dlss5.integration/$version") -Destination $packages -Recurse
     }
+    Copy-Item -LiteralPath (Join-Path $nativeRoot 'official-plugin-packages/ssmt.poser.genshin-probe') -Destination (Split-Path $packages) -Recurse
+    [IO.File]::WriteAllText((Join-Path $artifacts 'SSMT-Poser.dll'), 'poser fixture')
     [IO.File]::WriteAllText((Join-Path $artifacts 'SSMT-Gimi-Bridge.dll'), 'bridge fixture')
     [IO.File]::WriteAllText((Join-Path $artifacts 'SSMT-Gimi-Bridge-LICENSE.txt'), 'bridge license fixture')
     $stage = Join-Path $tools 'stage-local-plugins.ps1'
@@ -50,7 +52,16 @@ try {
     $release = Join-Path $testRoot 'release'
     & $pack -ReleaseTag v-test -OutputDirectory $release -NativeArtifactDirectory $artifacts | Out-Null
     $catalog = Get-Content "$release/ssmt-plugin-catalog.json" -Raw | ConvertFrom-Json
-    Assert-True (@($catalog.entries).Count -eq 2) '正式目录应保留两个获准版本'
+    Assert-True (@($catalog.entries).Count -eq 3) '正式目录应保留两个 DLSS5 版本和当前 Poser'
+    $poser = @($catalog.entries | Where-Object id -EQ 'ssmt.poser.genshin-probe')
+    Assert-True ($poser.Count -eq 1 -and $poser[0].version -ceq '0.1.1') 'Poser 新版应可发现，旧版不得重打当前 DLL'
+    Assert-True (-not (Test-Path "$release/ssmt.poser.genshin-probe-0.1.0.ssmtpkg")) '新 Release 不得复用已发布 Poser 版本'
+    $poserZip = [IO.Compression.ZipFile]::OpenRead((Join-Path $release 'ssmt.poser.genshin-probe-0.1.1.ssmtpkg'))
+    try {
+        Assert-True (@($poserZip.Entries | Where-Object { $_.FullName.Replace('\', '/') -ceq 'native/SSMT-Poser.dll' }).Count -eq 1) '新版 Poser 必须包含 DLL'
+        Assert-True (@($poserZip.Entries | Where-Object Name -EQ 'MinHook-LICENSE.txt').Count -eq 1) '新版 Poser 必须保留依赖许可证'
+        Assert-True (@($poserZip.Entries | Where-Object Name -EQ 'Bullet-LICENSE.txt').Count -eq 1) '新版 Poser 必须包含静态链接 Bullet 的许可证'
+    } finally { $poserZip.Dispose() }
     foreach ($entry in $catalog.entries) {
         $packagePath = Join-Path $release ([IO.Path]::GetFileName(([Uri]$entry.downloadUrl).AbsolutePath))
         Assert-True ((Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash.ToLowerInvariant() -ceq $entry.sha256) '目录哈希与发布包不一致'

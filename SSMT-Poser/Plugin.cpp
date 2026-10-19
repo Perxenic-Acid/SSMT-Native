@@ -67,7 +67,7 @@ extern "C" __declspec(dllexport) poser::Status SSMTPlugin_Query(
         return poser::TooSmall;
     info->abi_version = poser::AbiVersion;
     info->name = "SSMT Poser - Genshin Runtime Probe";
-    info->version = "0.1.0";
+    info->version = SSMT_POSER_VERSION;
     info->author = "SSMT";
     api->abi_version = poser::AbiVersion;
     api->initialize = Initialize;

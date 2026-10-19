@@ -1,3 +1,4 @@
 {
-  "publish": true
+  "publish": false,
+  "reason": "历史 0.1.0 已发布；禁止把当前 DLL 重新打包为旧版本，请使用 0.1.1 或后续版本。"
 }

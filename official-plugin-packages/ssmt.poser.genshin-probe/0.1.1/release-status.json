@@ -1,0 +1,4 @@
+{
+  "publish": true,
+  "sourcePaths": ["SSMT-Poser", "SSMT-Player-Tweaks/ThirdParty/MinHook"]
+}

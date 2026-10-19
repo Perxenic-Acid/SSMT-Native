@@ -55,6 +55,23 @@ jobs:
           }
           "Mode: $env:RELEASE_MODE; tag: $env:RELEASE_TAG; sha: $env:GITHUB_SHA" |
             Out-File $env:GITHUB_STEP_SUMMARY -Append
+      - name: 检查插件源码更新是否提升包版本
+        if: ${{ inputs.release_mode == 'publish_new_release' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # /latest 与客户端发现入口一致；首次发布才允许没有基线。
+          $response = Invoke-WebRequest -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/latest" `
+            -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; 'User-Agent' = 'SSMT-Native-Release' } -SkipHttpErrorCheck
+          if ([int]$response.StatusCode -eq 404) {
+            Write-Host '仓库尚无正式 Release，跳过历史版本比较。'
+          } elseif ([int]$response.StatusCode -ne 200) {
+            throw "无法读取已发布插件基线：HTTP $($response.StatusCode)"
+          } else {
+            $baseTag = ($response.Content | ConvertFrom-Json).tag_name
+            ./tools/check-plugin-release-versions.ps1 -BaseRef $baseTag
+          }
       - name: 安装 Rust 工具链
         shell: pwsh
         run: |
@@ -100,7 +117,9 @@ jobs:
           "revision=$($pin.revision)" | Out-File $env:GITHUB_OUTPUT -Append
       - name: 验证插件版本隔离与打包完整性
         shell: pwsh
-        run: ./tools/tests/test-official-packaging.ps1
+        run: |
+          ./tools/tests/test-plugin-release-versions.ps1
+          ./tools/tests/test-official-packaging.ps1
       - uses: actions/checkout@v4
         with:
           repository: Perxenic-Acid/OptiScaler_DLSSNR
