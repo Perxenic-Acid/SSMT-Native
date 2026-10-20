@@ -210,4 +210,28 @@ namespace DirectInjector
             "exit_code_read=%d, exact_module_detected=%d\n", pid, path.c_str(), exitCode, exitCodeRead, loaded);
         return loaded;
     }
+
+    // 直接启动时目标 PID 是已知的，必须注入这个进程，不能按同名路径重新扫描，
+    // 否则会命中上一次启动残留的 Endfield.exe。
+    inline HANDLE OpenTargetByPid(DWORD pid, const std::filesystem::path &target)
+    {
+        HANDLE process = OpenProcess(
+            PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION |
+                PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ |
+                SYNCHRONIZE,
+            FALSE,
+            pid);
+        if (!process)
+        {
+            printf("[Loader] OpenProcess PID=%lu failed: win32=%lu\n", pid, GetLastError());
+            return nullptr;
+        }
+        if (WaitForSingleObject(process, 0) != WAIT_TIMEOUT || !MatchesTarget(process, target))
+        {
+            printf("[Loader] Created target PID=%lu is no longer the expected process\n", pid);
+            CloseHandle(process);
+            return nullptr;
+        }
+        return process;
+    }
 }

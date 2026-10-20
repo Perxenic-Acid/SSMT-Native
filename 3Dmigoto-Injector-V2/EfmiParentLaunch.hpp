@@ -43,14 +43,6 @@ namespace EfmiParentLaunch
             thread_ = thread;
         }
 
-        void ReleaseAfter(DWORD delay_ms)
-        {
-            if (!process_)
-                return;
-            Sleep(delay_ms);
-            Reset();
-        }
-
         void Reset()
         {
             if (process_)
@@ -289,7 +281,56 @@ namespace EfmiParentLaunch
             }
             return true;
         }
+
+        struct WindowSearch
+        {
+            DWORD pid = 0;
+            HWND window = nullptr;
+        };
+
+        inline BOOL CALLBACK FindGameWindow(HWND window, LPARAM parameter)
+        {
+            auto &search = *reinterpret_cast<WindowSearch *>(parameter);
+            DWORD window_pid = 0;
+            GetWindowThreadProcessId(window, &window_pid);
+            if (window_pid != search.pid || !IsWindowVisible(window))
+                return TRUE;
+            if (GetWindowLongW(window, GWL_EXSTYLE) & WS_EX_TOOLWINDOW)
+                return TRUE;
+            if (GetWindowTextLengthW(window) == 0)
+                return TRUE;
+
+            RECT rect{};
+            if (!GetWindowRect(window, &rect))
+                return TRUE;
+            if (rect.right - rect.left < 320 || rect.bottom - rect.top < 200)
+                return TRUE;
+
+            search.window = window;
+            return FALSE;
+        }
+
+        // XXMI 在游戏窗口出现后再停父进程；这里用同样的窗口条件，
+        // 避免固定时间在新机器/慢磁盘上过早释放。
+        inline bool WaitForGameWindow(DWORD pid, DWORD timeout_ms)
+        {
+            const ULONGLONG deadline = GetTickCount64() + timeout_ms;
+            do
+            {
+                WindowSearch search{pid, nullptr};
+                EnumWindows(FindGameWindow, reinterpret_cast<LPARAM>(&search));
+                if (search.window)
+                    return true;
+                Sleep(200);
+            } while (GetTickCount64() < deadline);
+            return false;
+        }
     } // namespace Detail
+
+    inline bool WaitForGameWindow(DWORD pid, DWORD timeout_ms)
+    {
+        return Detail::WaitForGameWindow(pid, timeout_ms);
+    }
 
     inline LaunchResult Launch(
         const std::filesystem::path &configured_launcher,
@@ -311,6 +352,19 @@ namespace EfmiParentLaunch
         PROCESS_INFORMATION parent_info{};
         if (!Detail::StartSuspended(parent, L"", parent_info, result.error))
             return result;
+
+        // XXMI waits for the launcher process to be observable before creating the
+        // game. A short wait also catches single-instance launchers that exit early.
+        if (WaitForSingleObject(parent_info.hProcess, 500) != WAIT_TIMEOUT)
+        {
+            DWORD exit_code = 0;
+            GetExitCodeProcess(parent_info.hProcess, &exit_code);
+            result.error = "Launcher parent exited before target creation (exit code " +
+                std::to_string(exit_code) + ")";
+            CloseHandle(parent_info.hThread);
+            CloseHandle(parent_info.hProcess);
+            return result;
+        }
 
         ParentProcessGuard local_parent;
         local_parent.Attach(parent_info.hProcess, parent_info.hThread);
