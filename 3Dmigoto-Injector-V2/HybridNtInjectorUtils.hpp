@@ -11,6 +11,7 @@
 
 #include "D3dxIniUtils.hpp"
 #include "DirectInjector.hpp"
+#include "EfmiParentLaunch.hpp"
 #include "InjectorUtils.hpp"
 #include "LaunchEvents.hpp"
 #include "LoaderOptions.hpp"
@@ -101,9 +102,30 @@ private:
             }
         }
 
-        printf("[Loader] Direct wait mode: target=%S, timeout=%lu ms.\n"
-            "[Loader] Start the game through its OFFICIAL LAUNCHER with DirectX 11 enabled.\n",
+        EfmiParentLaunch::ParentProcessGuard parent_guard;
+        if (options.launch_with_parent)
+        {
+            const auto launch = EfmiParentLaunch::Launch(
+                *options.launch_parent,
+                target,
+                options.target_arguments.value_or(L""),
+                parent_guard);
+            if (!launch.ok)
+            {
+                printf("[Loader] %s\n", launch.error.c_str());
+                events.emit_error("target_launch", "parent_launch_failed",
+                    "Failed to launch the target with the official launcher parent");
+                return false;
+            }
+            events.emit_pid("target_created", launch.target_pid);
+        }
+
+        printf("[Loader] Direct wait mode: target=%S, timeout=%lu ms.\n",
             target.c_str(), options.process_timeout_ms);
+        if (options.launch_with_parent)
+            printf("[Loader] Target is launched through the official launcher parent process.\n");
+        else
+            printf("[Loader] Start the game through its OFFICIAL LAUNCHER with DirectX 11 enabled.\n");
         fflush(stdout);
         events.emit("waiting_for_target");
         DWORD pid = 0;
@@ -145,6 +167,8 @@ private:
             return false;
         }
         events.emit("launch_complete");
+        if (parent_guard)
+            parent_guard.ReleaseAfter(15000);
         // JSONL 调用方会收集退出码；不能因用户设置 delay=-1 而隐藏等待控制台输入。
         if (!options.machine_readable)
             AutoExitOrWait(ini.delay);
