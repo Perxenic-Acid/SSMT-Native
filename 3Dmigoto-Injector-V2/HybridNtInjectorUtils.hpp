@@ -102,6 +102,7 @@ private:
             }
         }
 
+        DWORD launched_pid = 0;
         EfmiParentLaunch::ParentProcessGuard parent_guard;
         if (options.launch_with_parent)
         {
@@ -117,7 +118,8 @@ private:
                     "Failed to launch the target with the official launcher parent");
                 return false;
             }
-            events.emit_pid("target_created", launch.target_pid);
+            launched_pid = launch.target_pid;
+            events.emit_pid("target_created", launched_pid);
         }
 
         printf("[Loader] Direct wait mode: target=%S, timeout=%lu ms.\n",
@@ -129,7 +131,12 @@ private:
         fflush(stdout);
         events.emit("waiting_for_target");
         DWORD pid = 0;
-        DirectInjector::Handle process(DirectInjector::WaitForTarget(target, options.process_timeout_ms, pid));
+        HANDLE target_handle = options.launch_with_parent
+            ? DirectInjector::OpenTargetByPid(launched_pid, target)
+            : DirectInjector::WaitForTarget(target, options.process_timeout_ms, pid);
+        if (options.launch_with_parent)
+            pid = launched_pid;
+        DirectInjector::Handle process(target_handle);
         if (!process)
         {
             events.emit_error("target_wait", "target_unavailable", "Target unavailable; check official launcher, executable path, timeout and access rights");
@@ -168,7 +175,20 @@ private:
         }
         events.emit("launch_complete");
         if (parent_guard)
-            parent_guard.ReleaseAfter(15000);
+        {
+            // XXMI 在游戏窗口出现后停留约 3 秒再释放启动器父进程。
+            // 120 秒仅作为窗口迟迟不出现时的兜底。
+            if (EfmiParentLaunch::WaitForGameWindow(pid, 120000))
+            {
+                printf("[Loader] Game window detected; releasing launcher parent in 3 seconds...\n");
+                Sleep(3000);
+            }
+            else
+            {
+                printf("[Loader] Timed out waiting for the game window; releasing launcher parent.\n");
+            }
+            parent_guard.Reset();
+        }
         // JSONL 调用方会收集退出码；不能因用户设置 delay=-1 而隐藏等待控制台输入。
         if (!options.machine_readable)
             AutoExitOrWait(ini.delay);
