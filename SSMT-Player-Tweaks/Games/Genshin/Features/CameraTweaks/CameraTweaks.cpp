@@ -1,5 +1,6 @@
 #include "CameraTweaks.h"
 #include "CameraZoom.h"
+#include "CharacterVisibility.h"
 
 #include "Core/HookManager.h"
 #include "Games/Genshin/GenshinCameraBridge.h"
@@ -177,9 +178,12 @@ namespace SSMT::Tweaks::Genshin::CameraTweaks
                 reinterpret_cast<void *>(&HookedBlenderTick),
                 reinterpret_cast<void **>(&originalBlenderTick));
         if (config.disableCharacterFade)
+        {
             TryInstall(log, "CharacterFade", cameraBridge.playerPerspective,
                 reinterpret_cast<void *>(&HookedPlayerPerspective),
                 reinterpret_cast<void **>(&originalPlayerPerspective));
+            InstallSceneCameraFadeHook(scanner, cameraBridge.sceneCameraFade, log);
+        }
         if (config.disableEventCameraMovement)
             TryInstall(log, "EventCamera", cameraBridge.eventCamera,
                 reinterpret_cast<void *>(&HookedEventCamera),

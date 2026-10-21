@@ -2,6 +2,7 @@
 
 #include "GenshinPatterns.h"
 #include "Features/CameraTweaks/CameraZoom.h"
+#include "Features/CameraTweaks/CharacterVisibility.h"
 
 namespace SSMT::Tweaks::Genshin
 {
@@ -147,6 +148,9 @@ namespace SSMT::Tweaks::Genshin
             bridge.playerPerspective = ResolveSymbol(scanner, Patterns::PlayerPerspective,
                 ResolverKind::RelativeBranch);
             LogSymbol(log, "PlayerPerspective", bridge.playerPerspective, scanner);
+            bridge.sceneCameraFade = ResolveSymbol(scanner, Patterns::SceneCameraFade,
+                ResolverKind::Direct, CameraTweaks::ValidateSceneCameraFade);
+            LogSymbol(log, "SceneCameraFade", bridge.sceneCameraFade, scanner);
         }
         if (config.disableEventCameraMovement)
         {

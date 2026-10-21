@@ -1,0 +1,8 @@
+{
+  "files": [
+    {
+      "source": "SSMT-Player-Tweaks.dll",
+      "destination": "runtime/SSMT-Player-Tweaks.dll"
+    }
+  ]
+}

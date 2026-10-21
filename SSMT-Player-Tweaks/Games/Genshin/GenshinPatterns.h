@@ -91,6 +91,14 @@ namespace SSMT::Tweaks::Genshin::Patterns
         "0F 85 ?? ?? ?? ?? "
         "80 BE ?? ?? ?? ?? ?? 74 11";
 
+    inline constexpr std::string_view SceneCameraFade =
+        "41 57 41 56 56 57 55 53 48 81 EC F8 00 00 00 "
+        "44 0F 29 B4 24 E0 00 00 00 44 0F 29 AC 24 D0 00 00 00 "
+        "44 0F 29 A4 24 C0 00 00 00 44 0F 29 9C 24 B0 00 00 00 "
+        "44 0F 29 94 24 A0 00 00 00 44 0F 29 8C 24 90 00 00 00 "
+        "44 0F 29 84 24 80 00 00 00 0F 29 7C 24 70 0F 29 74 24 60 "
+        "44 0F 28 C3 4C 89 C6 48 89 D3 48 89 CF";
+
     inline constexpr std::string_view GetFrameCount =
         "E8 ?? ?? ?? ?? 85 C0 7E 0E "
         "E8 ?? ?? ?? ?? 0F 57 C0 "

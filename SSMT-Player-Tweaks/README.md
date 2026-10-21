@@ -1,5 +1,28 @@
 # SSMT Player Tweaks
 
+## 原神镜头导致的角色淡出
+
+Player Tweaks **0.1.1** 扩展现有“关闭角色镜头淡出”开关，沿用
+`[Camera] DisableCharacterFade=1`，无需迁移旧配置。开启后同时处理原有
+`PlayerPerspective` 路径，以及角色展示场景独立的镜头距离淡出路径。
+后者被 `MonoSceneUISetup` 调用，直接写入渲染组件透明度，原有 Hook 无法覆盖。
+
+新 Hook 仅把这个镜头计算路径即将提交的透明度改为 `1.0f`，继续执行原生脏标记、
+渲染应用和返回值处理。条件不满足时的 `-1.0f` 返回和其他正常显隐路径不变；
+不拦截通用 `SetActive`、Renderer enabled 或角色退场/切换。
+关闭开关时不解析或安装新增 Hook；未启用插件时不进入这些逻辑。
+
+当前覆盖同下节列出的 **7.1 CN/Bilibili** 样本。采用唯一 AOB 加距离计算、
+组件类型、透明度写入、常量、返回布局和两个 IFix 分支检查，没有固定 RVA 回退。
+布局变化、IFix 已激活或安装冲突时只跳过新增路径并记录原因，其他功能继续运行。
+保留原生 IFix 分支，运行中启用热修复后该分支不进入新增拦截点。
+提交热路径只有 SSE 常量加载与跳转，没有 C++ 回调、扫描、分配、锁或日志。
+
+实机尚需确认角色界面贴近/低角度、外观页、切换角色及返回世界的显示，
+不能把离线验证当作画面验收。该 Hook 不改变相机近裁剪面，也不修改独立的 Shader
+裁剪规则。日志为 `%LOCALAPPDATA%/SSMT4CachedFolder/Logs/SSMT-Player-Tweaks.log`，
+新增路径安装成功时包含 `Camera.SceneCharacterFade enabled`。
+
 ## 原神原生缩放范围解锁
 
 在 SSMT 插件页的镜头设置中开启“解锁原生缩放上下限”，保存后下次通过 SSMT
@@ -46,7 +69,7 @@ IFix 标志和输入/距离写回布局。
 
 ```powershell
 cmake -S . -B build
-cmake --build build --config Release --target SSMT-Player-Tweaks CameraPolicyTests CameraZoomTests --parallel
+cmake --build build --config Release --target SSMT-Player-Tweaks CameraPolicyTests CameraZoomTests CharacterVisibilityTests --parallel
 ```
 
 运行 `build/SSMT-Player-Tweaks/Release/CameraPolicyTests.exe`，以及：
@@ -63,3 +86,14 @@ CameraZoomTests.exe <camera_zoom_limits_research 证据目录> [上述哈希对�
 移除后恢复限制、布局/常量破坏、IFix 激活、候选歧义、安装冲突回滚和镜头功能组合。
 测试中的通用 SSE 限制块在独立 ABI 测试函数中运行；完整游戏函数只映射并扫描，绝不调用。
 传入完整样本前应核对哈希；研究脚本及游戏证据不随插件分发。
+
+角色淡出的独立回归：
+
+```text
+CharacterVisibilityTests.exe <镜头淡出函数的已核对二进制证据> [上述哈希对应的 YuanShen.exe]
+```
+
+本工作区输入为主仓库 `tmp/model-visibility-20261021/ui_opacity_0CBBE480.bin`。
+覆盖真实样本唯一定位、关闭开关、布局/常量/IFix/分支目标变化、候选歧义、安装冲突、
+移除恢复，以及实际 MinHook 跳转后的透明度、脏标记、渲染应用和其他显隐通道保持。
+完整游戏函数只映射供扫描；实际执行仅限隔离的 SSE 提交块与自建测试对象，不启动游戏。

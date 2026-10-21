@@ -14,6 +14,7 @@ namespace SSMT::Tweaks::Genshin
         ResolvedSymbol updateView;
         ResolvedSymbol blenderTick;
         ResolvedSymbol playerPerspective;
+        ResolvedSymbol sceneCameraFade;
         ResolvedSymbol eventCamera;
         ResolvedSymbol inputZoomTick;
         ResolvedSymbol inputZoomAdjust;

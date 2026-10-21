@@ -35,6 +35,8 @@ add_library(SSMT-Player-Tweaks SHARED
     Games/Genshin/Features/CameraTweaks/CameraTweaks.h
     Games/Genshin/Features/CameraTweaks/CameraZoom.h
     Games/Genshin/Features/CameraTweaks/CameraZoom.cpp
+    Games/Genshin/Features/CameraTweaks/CharacterVisibility.h
+    Games/Genshin/Features/CameraTweaks/CharacterVisibility.cpp
     Games/Genshin/GenshinCameraBridge.cpp
     Games/Genshin/GenshinCameraBridge.h
     Games/Genshin/GenshinConfig.cpp
@@ -84,11 +86,27 @@ add_executable(CameraZoomTests
     Core/HookManager.cpp
     Games/Genshin/GenshinCameraBridge.cpp
     Games/Genshin/Features/CameraTweaks/CameraZoom.cpp
+    Games/Genshin/Features/CameraTweaks/CharacterVisibility.cpp
 )
 target_link_libraries(CameraZoomTests PRIVATE minhook)
 target_include_directories(CameraZoomTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 if(MSVC)
     target_compile_options(CameraZoomTests PRIVATE /utf-8)
+endif()
+
+add_executable(CharacterVisibilityTests
+    Tests/CharacterVisibilityTests.cpp
+    Core/PatternScanner.cpp
+    Core/SymbolResolver.cpp
+    Core/HookManager.cpp
+    Games/Genshin/GenshinCameraBridge.cpp
+    Games/Genshin/Features/CameraTweaks/CameraZoom.cpp
+    Games/Genshin/Features/CameraTweaks/CharacterVisibility.cpp
+)
+target_link_libraries(CharacterVisibilityTests PRIVATE minhook)
+target_include_directories(CharacterVisibilityTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+if(MSVC)
+    target_compile_options(CharacterVisibilityTests PRIVATE /utf-8)
 endif()
 
 target_include_directories(SSMT-Player-Tweaks PRIVATE
