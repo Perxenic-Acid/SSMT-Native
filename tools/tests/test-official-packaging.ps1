@@ -14,9 +14,27 @@ try {
         Copy-Item -LiteralPath (Join-Path $nativeRoot "official-plugin-packages/ssmt.dlss5.integration/$version") -Destination $packages -Recurse
     }
     Copy-Item -LiteralPath (Join-Path $nativeRoot 'official-plugin-packages/ssmt.poser.genshin-probe') -Destination (Split-Path $packages) -Recurse
+    $injectedPackage = Join-Path (Split-Path $packages) 'ssmt.injected.fixture/1.0.0'
+    New-Item -ItemType Directory -Path $injectedPackage, (Join-Path $injectedPackage 'plugin') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $injectedPackage 'ssmt-plugin.json'), (@{
+        schemaVersion = 1
+        id = 'ssmt.injected.fixture'
+        name = 'Injected fixture'
+        version = '1.0.0'
+        author = 'SSMT tests'
+        compatibility = @{ ssmt = '>=4.2.0'; platforms = @('windows-x64'); games = @('EFMI') }
+        contributions = @{ injectedDlls = @(@{ path = 'plugin/fixture.dll'; sha256 = ('0' * 64) }) }
+        externalDependencies = @()
+        permissions = @('native.inject')
+    } | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $injectedPackage 'release-status.json'),
+        '{"publish":true}', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $injectedPackage 'build-artifacts.json'),
+        '{"files":[{"source":"fixture.dll","destination":"plugin/fixture.dll"}]}', [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $artifacts 'SSMT-Poser.dll'), 'poser fixture')
     [IO.File]::WriteAllText((Join-Path $artifacts 'SSMT-Gimi-Bridge.dll'), 'bridge fixture')
     [IO.File]::WriteAllText((Join-Path $artifacts 'SSMT-Gimi-Bridge-LICENSE.txt'), 'bridge license fixture')
+    [IO.File]::WriteAllText((Join-Path $artifacts 'fixture.dll'), 'injected dll fixture')
     $stage = Join-Path $tools 'stage-local-plugins.ps1'
     $pack = Join-Path $tools 'pack-official-plugins.ps1'
     $oldOnly = Join-Path $testRoot 'old-only'
@@ -52,7 +70,7 @@ try {
     $release = Join-Path $testRoot 'release'
     & $pack -ReleaseTag v-test -OutputDirectory $release -NativeArtifactDirectory $artifacts | Out-Null
     $catalog = Get-Content "$release/ssmt-plugin-catalog.json" -Raw | ConvertFrom-Json
-    Assert-True (@($catalog.entries).Count -eq 3) '正式目录应保留两个 DLSS5 版本和当前 Poser'
+    Assert-True (@($catalog.entries).Count -eq 4) '正式目录应保留两个 DLSS5 版本、当前 Poser 和注入 DLL 样例'
     $poser = @($catalog.entries | Where-Object id -EQ 'ssmt.poser.genshin-probe')
     Assert-True ($poser.Count -eq 1 -and $poser[0].version -ceq '0.1.1') 'Poser 新版应可发现，旧版不得重打当前 DLL'
     Assert-True (-not (Test-Path "$release/ssmt.poser.genshin-probe-0.1.0.ssmtpkg")) '新 Release 不得复用已发布 Poser 版本'
@@ -62,6 +80,16 @@ try {
         Assert-True (@($poserZip.Entries | Where-Object Name -EQ 'MinHook-LICENSE.txt').Count -eq 1) '新版 Poser 必须保留依赖许可证'
         Assert-True (@($poserZip.Entries | Where-Object Name -EQ 'Bullet-LICENSE.txt').Count -eq 1) '新版 Poser 必须包含静态链接 Bullet 的许可证'
     } finally { $poserZip.Dispose() }
+    $injectedZip = [IO.Compression.ZipFile]::OpenRead((Join-Path $release 'ssmt.injected.fixture-1.0.0.ssmtpkg'))
+    try {
+        $manifestEntry = @($injectedZip.Entries | Where-Object { $_.FullName.Replace('\', '/') -ceq 'ssmt-plugin.json' })
+        Assert-True ($manifestEntry.Count -eq 1) '注入 DLL 样例缺少插件清单'
+        $reader = [IO.StreamReader]::new($manifestEntry[0].Open())
+        try { $packedManifest = $reader.ReadToEnd() | ConvertFrom-Json }
+        finally { $reader.Dispose() }
+        $expectedHash = (Get-FileHash -LiteralPath (Join-Path $artifacts 'fixture.dll') -Algorithm SHA256).Hash
+        Assert-True ($packedManifest.contributions.injectedDlls[0].sha256 -ceq $expectedHash) '打包时未回写实际注入 DLL 哈希'
+    } finally { $injectedZip.Dispose() }
     foreach ($entry in $catalog.entries) {
         $packagePath = Join-Path $release ([IO.Path]::GetFileName(([Uri]$entry.downloadUrl).AbsolutePath))
         Assert-True ((Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash.ToLowerInvariant() -ceq $entry.sha256) '目录哈希与发布包不一致'

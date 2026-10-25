@@ -58,6 +58,12 @@ Poser 已纳入正式发布：CI 必须构建、测试 `SSMT-Poser.dll`，并将
 未声明 `runtimePlugins` 不等于缺少 DLL；PowerShell 管线须过滤缺省字段产生的空值，
 辅助组件仍按 `build-artifacts.json` 独立检查。
 
+Secondary Motion 3.2.0 通过固定上游提交
+`Sp1cHless/Arknights-Endfield-Plugin-Secondary-bodyphysics@90266f837dde5822a6a47b7403cc64081e3a9368`
+构建 `sbm.dll`。Windows 工作流调用 `tools/build-secondary-motion.ps1` 后，打包器将实际
+产物放入 `plugin/sbm.dll`，并根据该字节流回写清单中的 SHA-256。包内同时保留上游
+GPL-3.0 许可证、第三方声明、来源记录、角色数据和 Default/Set1/User 预设。
+
 仅 Debug 应用只读发现此开发目录，即使 Native Release 请求失败也可显示开发包。
 正式版不扫描开发包或旧版 `resources/PluginPackages`，安装器不携带插件包、旧占位清单
 或 Player Tweaks DLL；仅通过 Native Release 目录按需安装官方插件。第三方文件安装

@@ -1,0 +1,7 @@
+{
+  "publish": true,
+  "sourcePaths": [
+    "tools/sources/secondary-motion.json",
+    "tools/build-secondary-motion.ps1"
+  ]
+}

@@ -114,6 +114,35 @@ foreach ($idDirectory in Get-ChildItem -LiteralPath $sourceRoot -Directory) {
                     Copy-Item -LiteralPath $artifact -Destination $destination
                 }
             }
+
+            # Directly injected DLLs are built by the Native workflow. Write the
+            # hash from the bytes that actually enter this package so a fresh
+            # CI rebuild does not invalidate the manifest's optional checksum.
+            $manifestChanged = $false
+            foreach ($injected in @($manifest.contributions.injectedDlls)) {
+                if ($null -eq $injected) { continue }
+                $relative = [string]$injected.path
+                if ([string]::IsNullOrWhiteSpace($relative) -or [IO.Path]::IsPathRooted($relative) -or
+                    $relative -match '(^|[\\/])\.\.([\\/]|$)' -or $relative -match ':') {
+                    throw "非法注入 DLL 路径: $relative"
+                }
+                $destination = [IO.Path]::GetFullPath((Join-Path $stagingRoot $relative))
+                if (-not $destination.StartsWith($stagingRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+                    throw "注入 DLL 路径超出包目录: $relative"
+                }
+                if (-not (Test-Path -LiteralPath $destination -PathType Leaf)) {
+                    throw "插件包缺少注入 DLL: $relative"
+                }
+                $injected.sha256 = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash
+                $manifestChanged = $true
+            }
+            if ($manifestChanged) {
+                [IO.File]::WriteAllText(
+                    (Join-Path $stagingRoot 'ssmt-plugin.json'),
+                    ($manifest | ConvertTo-Json -Depth 20),
+                    [Text.UTF8Encoding]::new($false)
+                )
+            }
             [IO.Compression.ZipFile]::CreateFromDirectory(
                 $stagingRoot, $assetPath, [IO.Compression.CompressionLevel]::Optimal, $false
             )
