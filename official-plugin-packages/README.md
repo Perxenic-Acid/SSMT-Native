@@ -66,6 +66,11 @@ GPL-3.0 许可证、第三方声明、来源记录、角色数据和 Default/Set
 3.2.0 因包内清单包含 SSMT 不支持的 `description` 字段而导致安装失败，已从正式发布
 候选中撤销；3.2.1 删除该字段并新增打包前的清单字段白名单校验。
 
+插件 PR 与 `main` 变更会运行独立的 `Validate official plugin packages` 工作流：
+校验所有获准清单的顶层与嵌套字段，执行打包/版本回归，固定上游提交构建
+`sbm.dll`，再从实际 `.ssmtpkg` 中读取清单并核对 DLL 哈希。正式发布工作流仍采用
+显式 `publish_new_release`，PR 校验不会上传或发布资产。
+
 仅 Debug 应用只读发现此开发目录，即使 Native Release 请求失败也可显示开发包。
 正式版不扫描开发包或旧版 `resources/PluginPackages`，安装器不携带插件包、旧占位清单
 或 Player Tweaks DLL；仅通过 Native Release 目录按需安装官方插件。第三方文件安装
