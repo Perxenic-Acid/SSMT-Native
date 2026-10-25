@@ -47,6 +47,16 @@ foreach ($idDirectory in Get-ChildItem -LiteralPath $sourceRoot -Directory) {
         if ($manifest.id -cne $idDirectory.Name -or $manifest.version -cne $versionDirectory.Name) {
             throw "插件清单与目录不一致: $manifestPath"
         }
+        $allowedManifestFields = @(
+            'schemaVersion', 'id', 'name', 'version', 'author', 'compatibility',
+            'contributions', 'externalDependencies', 'permissions'
+        )
+        $unknownManifestFields = @(
+            $manifest.PSObject.Properties.Name | Where-Object { $_ -notin $allowedManifestFields }
+        )
+        if ($unknownManifestFields.Count) {
+            throw "插件清单包含 SSMT 不支持的字段: $($unknownManifestFields -join ', ')"
+        }
         if ($DevelopmentPluginId -and -not $LocalBuild) {
             # 本地测试走已有第三方包校验，不能冒充已验证的 Native Release 来源。
             $manifest.id = 'dev.' + $manifest.id
