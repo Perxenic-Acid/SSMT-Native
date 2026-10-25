@@ -58,11 +58,18 @@ Poser 已纳入正式发布：CI 必须构建、测试 `SSMT-Poser.dll`，并将
 未声明 `runtimePlugins` 不等于缺少 DLL；PowerShell 管线须过滤缺省字段产生的空值，
 辅助组件仍按 `build-artifacts.json` 独立检查。
 
-Secondary Motion 3.2.0 通过固定上游提交
+Secondary Motion 3.2.1 通过固定上游提交
 `Sp1cHless/Arknights-Endfield-Plugin-Secondary-bodyphysics@90266f837dde5822a6a47b7403cc64081e3a9368`
 构建 `sbm.dll`。Windows 工作流调用 `tools/build-secondary-motion.ps1` 后，打包器将实际
 产物放入 `plugin/sbm.dll`，并根据该字节流回写清单中的 SHA-256。包内同时保留上游
 GPL-3.0 许可证、第三方声明、来源记录、角色数据和 Default/Set1/User 预设。
+3.2.0 因包内清单包含 SSMT 不支持的 `description` 字段而导致安装失败，已从正式发布
+候选中撤销；3.2.1 删除该字段并新增打包前的清单字段白名单校验。
+
+插件 PR 与 `main` 变更会运行独立的 `Validate official plugin packages` 工作流：
+校验所有获准清单的顶层与嵌套字段，执行打包/版本回归，固定上游提交构建
+`sbm.dll`，再从实际 `.ssmtpkg` 中读取清单并核对 DLL 哈希。正式发布工作流仍采用
+显式 `publish_new_release`，PR 校验不会上传或发布资产。
 
 仅 Debug 应用只读发现此开发目录，即使 Native Release 请求失败也可显示开发包。
 正式版不扫描开发包或旧版 `resources/PluginPackages`，安装器不携带插件包、旧占位清单

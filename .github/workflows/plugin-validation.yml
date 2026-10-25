@@ -1,0 +1,128 @@
+name: Validate official plugin packages
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/plugin-validation.yml"
+      - "official-plugin-packages/**"
+      - "tools/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/plugin-validation.yml"
+      - "official-plugin-packages/**"
+      - "tools/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate every approved manifest
+        shell: pwsh
+        run: |
+          $approved = 0
+          Get-ChildItem official-plugin-packages -Recurse -Filter ssmt-plugin.json -File | ForEach-Object {
+            $statusPath = Join-Path $_.DirectoryName 'release-status.json'
+            if (!(Test-Path -LiteralPath $statusPath -PathType Leaf)) { return }
+            $status = Get-Content -LiteralPath $statusPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($status.publish -ne $true) { return }
+            & ./tools/validate-plugin-manifest.ps1 -Path $_.FullName | Out-Null
+            $approved++
+          }
+          if ($approved -eq 0) { throw 'No approved plugin manifests were validated.' }
+          "Validated approved manifests: $approved" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+
+      - name: Run packaging regressions
+        shell: pwsh
+        run: |
+          ./tools/tests/test-official-packaging.ps1
+          ./tools/tests/test-plugin-release-versions.ps1
+
+      - name: Check plugin versions against latest release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $response = Invoke-WebRequest -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/latest" `
+            -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; 'User-Agent' = 'SSMT-Native-Validation' } -SkipHttpErrorCheck
+          if ([int]$response.StatusCode -eq 404) {
+            Write-Host 'No published release baseline yet.'
+          } elseif ([int]$response.StatusCode -ne 200) {
+            throw "Could not read latest release: HTTP $($response.StatusCode)"
+          } else {
+            $baseTag = ($response.Content | ConvertFrom-Json).tag_name
+            ./tools/check-plugin-release-versions.ps1 -BaseRef $baseTag
+          }
+
+      - name: Read pinned Secondary Motion source
+        id: secondary-motion
+        shell: pwsh
+        run: |
+          $pin = Get-Content tools/sources/secondary-motion.json -Raw | ConvertFrom-Json
+          if ($pin.repository -cne 'Sp1cHless/Arknights-Endfield-Plugin-Secondary-bodyphysics' -or
+              $pin.revision -notmatch '^[0-9a-f]{40}$') {
+            throw 'Invalid Secondary Motion source pin.'
+          }
+          "repository=$($pin.repository)" | Out-File $env:GITHUB_OUTPUT -Append
+          "revision=$($pin.revision)" | Out-File $env:GITHUB_OUTPUT -Append
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.secondary-motion.outputs.repository }}
+          ref: ${{ steps.secondary-motion.outputs.revision }}
+          path: build/secondary-motion-source
+          persist-credentials: false
+
+      - name: Build and package Secondary Motion
+        shell: pwsh
+        run: |
+          ./tools/build-secondary-motion.ps1 `
+            -SourceDirectory ./build/secondary-motion-source `
+            -OutputDirectory ./dist/Release
+          ./tools/pack-official-plugins.ps1 `
+            -ReleaseTag validation `
+            -DevelopmentPluginId ssmt.secondary-motion `
+            -PluginVersion 3.2.1 `
+            -LocalBuild `
+            -NativeArtifactDirectory ./dist/Release `
+            -OutputDirectory ./build/validation-plugin-release
+
+      - name: Validate the packed artifact
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $packagePath = Resolve-Path ./build/validation-plugin-release/ssmt.secondary-motion-3.2.1.ssmtpkg
+          $temporary = Join-Path $env:RUNNER_TEMP ('ssmt-plugin-validation-' + [Guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $temporary | Out-Null
+          try {
+            [IO.Compression.ZipFile]::ExtractToDirectory($packagePath, $temporary)
+            ./tools/validate-plugin-manifest.ps1 -Path (Join-Path $temporary 'ssmt-plugin.json') | Out-Null
+            $manifest = Get-Content (Join-Path $temporary 'ssmt-plugin.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+            $dll = Join-Path $temporary $manifest.contributions.injectedDlls[0].path
+            $actual = (Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash
+            if ($actual -cne $manifest.contributions.injectedDlls[0].sha256) {
+              throw 'Packed injected DLL hash does not match the manifest.'
+            }
+            foreach ($metadata in @('release-status.json', 'build-artifacts.json')) {
+              if (Test-Path -LiteralPath (Join-Path $temporary $metadata)) {
+                throw "Build-only metadata leaked into package: $metadata"
+              }
+            }
+          } finally {
+            [IO.Directory]::Delete($temporary, $true)
+          }

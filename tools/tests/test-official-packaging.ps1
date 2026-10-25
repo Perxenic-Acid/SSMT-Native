@@ -9,7 +9,8 @@ try {
     $artifacts = Join-Path $testRoot 'artifacts'
     New-Item -ItemType Directory -Path $tools, $packages, $artifacts | Out-Null
     Copy-Item -LiteralPath (Join-Path $nativeRoot 'tools/pack-official-plugins.ps1'),
-        (Join-Path $nativeRoot 'tools/stage-local-plugins.ps1') -Destination $tools
+        (Join-Path $nativeRoot 'tools/stage-local-plugins.ps1'),
+        (Join-Path $nativeRoot 'tools/validate-plugin-manifest.ps1') -Destination $tools
     foreach ($version in @('0.2.2', '0.2.3')) {
         Copy-Item -LiteralPath (Join-Path $nativeRoot "official-plugin-packages/ssmt.dlss5.integration/$version") -Destination $packages -Recurse
     }
@@ -31,12 +32,41 @@ try {
         '{"publish":true}', [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $injectedPackage 'build-artifacts.json'),
         '{"files":[{"source":"fixture.dll","destination":"plugin/fixture.dll"}]}', [Text.UTF8Encoding]::new($false))
+    $invalidTestRoot = Join-Path $testRoot 'invalid-manifest'
+    $invalidTools = Join-Path $invalidTestRoot 'tools'
+    $invalidPackage = Join-Path $invalidTestRoot 'official-plugin-packages/ssmt.invalid.manifest/1.0.0'
+    New-Item -ItemType Directory -Path $invalidTools, $invalidPackage | Out-Null
+    Copy-Item -LiteralPath (Join-Path $nativeRoot 'tools/pack-official-plugins.ps1'),
+        (Join-Path $nativeRoot 'tools/validate-plugin-manifest.ps1') -Destination $invalidTools
+    [IO.File]::WriteAllText((Join-Path $invalidPackage 'ssmt-plugin.json'), (@{
+        schemaVersion = 1
+        id = 'ssmt.invalid.manifest'
+        name = 'Invalid manifest'
+        version = '1.0.0'
+        author = 'SSMT tests'
+        compatibility = @{ ssmt = '>=4.2.0'; platforms = @('windows-x64'); games = @('EFMI') }
+        contributions = @{
+            injectedDlls = @(@{
+                path = 'plugin/fixture.dll'
+                description = 'Nested fields are also strict'
+            })
+        }
+        externalDependencies = @()
+        permissions = @()
+    } | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $invalidPackage 'release-status.json'),
+        '{"publish":true}', [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $artifacts 'SSMT-Poser.dll'), 'poser fixture')
     [IO.File]::WriteAllText((Join-Path $artifacts 'SSMT-Gimi-Bridge.dll'), 'bridge fixture')
     [IO.File]::WriteAllText((Join-Path $artifacts 'SSMT-Gimi-Bridge-LICENSE.txt'), 'bridge license fixture')
     [IO.File]::WriteAllText((Join-Path $artifacts 'fixture.dll'), 'injected dll fixture')
     $stage = Join-Path $tools 'stage-local-plugins.ps1'
     $pack = Join-Path $tools 'pack-official-plugins.ps1'
+    $invalidPack = Join-Path $invalidTools 'pack-official-plugins.ps1'
+    $invalidFailed = $false
+    try { & $invalidPack -ReleaseTag v-test -OutputDirectory (Join-Path $testRoot 'invalid-manifest-release') -NativeArtifactDirectory $artifacts | Out-Null }
+    catch { $invalidFailed = $_.Exception.Message -like '*unsupported field*description*' }
+    Assert-True $invalidFailed '正式打包必须拒绝 SSMT 不支持的嵌套清单字段'
     $oldOnly = Join-Path $testRoot 'old-only'
     & $stage -NativeArtifactDirectory $artifacts -OutputDirectory $oldOnly
     Assert-True (Test-Path "$oldOnly/ssmt.dlss5.integration-0.2.2.ssmtpkg") '缺少新辅助组件不应屏蔽已构建的旧版本'
