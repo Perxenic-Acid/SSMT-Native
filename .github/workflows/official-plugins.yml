@@ -115,6 +115,17 @@ jobs:
             throw 'OptiScaler 固定来源声明无效'
           }
           "revision=$($pin.revision)" | Out-File $env:GITHUB_OUTPUT -Append
+      - name: 读取固定 Secondary Motion 源码版本
+        id: secondary-motion
+        shell: pwsh
+        run: |
+          $pin = Get-Content tools/sources/secondary-motion.json -Raw | ConvertFrom-Json
+          if ($pin.repository -cne 'Sp1cHless/Arknights-Endfield-Plugin-Secondary-bodyphysics' -or
+              $pin.revision -notmatch '^[0-9a-f]{40}$') {
+            throw 'Secondary Motion 固定来源声明无效'
+          }
+          "repository=$($pin.repository)" | Out-File $env:GITHUB_OUTPUT -Append
+          "revision=$($pin.revision)" | Out-File $env:GITHUB_OUTPUT -Append
       - name: 验证插件版本隔离与打包完整性
         shell: pwsh
         run: |
@@ -127,6 +138,18 @@ jobs:
           path: build/optiscaler-source
           submodules: recursive
           persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.secondary-motion.outputs.repository }}
+          ref: ${{ steps.secondary-motion.outputs.revision }}
+          path: build/secondary-motion-source
+          persist-credentials: false
+      - name: 构建 Secondary Motion 注入 DLL
+        shell: pwsh
+        run: |
+          ./tools/build-secondary-motion.ps1 `
+            -SourceDirectory ./build/secondary-motion-source `
+            -OutputDirectory ./dist/Release
       - name: 构建汉化 OptiScaler 并执行无图形设备回归
         shell: pwsh
         run: ./tools/build-optiscaler.ps1 -SourceDirectory ./build/optiscaler-source
