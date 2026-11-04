@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "id": "ssmt.liquid-gravity-probe",
+  "name": "Liquid Gravity Probe",
+  "version": "0.2.32",
+  "author": "SSMT integration",
+  "compatibility": {
+    "ssmt": ">=4.2.2",
+    "platforms": [
+      "windows-x64"
+    ],
+    "games": [
+      "EFMI"
+    ]
+  },
+  "contributions": {
+    "uiPages": [
+      {
+        "id": "editor",
+        "route": "/plugins/liquid-gravity-probe",
+        "path": "ui/index.html"
+      }
+    ]
+  },
+  "externalDependencies": [
+    {
+      "id": "python-runtime",
+      "type": "directory",
+      "requiredFiles": [
+        "python.exe"
+      ],
+      "requiredFor": [
+        "launch"
+      ],
+      "downloadUrl": "https://www.python.org/downloads/windows/",
+      "downloadHint": "Liquid Gravity Probe 使用原版 server.py，需要 Python 3.12 或更高版本。请安装官方 Python，并在下方选择包含 python.exe 的安装目录；不需要 pip 第三方包。"
+    }
+  ],
+  "permissions": [
+    "filesystem.read",
+    "filesystem.write"
+  ]
+}
