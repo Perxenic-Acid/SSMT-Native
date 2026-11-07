@@ -1,0 +1,28 @@
+html,
+body,
+#app {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+  background: #090d10;
+}
+
+html.dark {
+  --t-page-text: #e7eef0;
+  --t-page-text-muted: #9aadb3;
+  --t-surface-subtle: rgba(14, 23, 27, .92);
+  --t-success-text: #91e0b1;
+  --t-success-bg: rgba(61, 165, 105, .16);
+  --t-warning-text: #ffd08a;
+  --t-warning-bg: rgba(120, 65, 10, .22);
+  --t-warning-border: rgba(255, 170, 70, .36);
+  --t-danger-text: #efaaa4;
+  --t-danger-bg: rgba(120, 35, 39, .22);
+  --market-line: rgba(142, 166, 174, .16);
+  --ssmt-brand-accent-rgb: 216, 233, 78;
+}
+
+body {
+  color-scheme: dark;
+  color: var(--t-page-text);
+}

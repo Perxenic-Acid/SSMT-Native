@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 2,
+  "id": "ssmt.liquid-gravity-probe",
+  "name": "Liquid Gravity Probe",
+  "version": "0.2.33",
+  "author": "SSMT integration",
+  "compatibility": {
+    "ssmt": ">=4.2.2",
+    "pluginApi": ">=1.0.0 <2.0.0",
+    "platforms": [
+      "windows-x64"
+    ],
+    "games": [
+      "EFMI"
+    ]
+  },
+  "contributions": {
+    "pages": [
+      {
+        "kind": "local-service",
+        "id": "editor",
+        "title": "Liquid Gravity Probe",
+        "path": "ui/index.html",
+        "service": {
+          "executable": "${external.python-runtime}/python.exe",
+          "arguments": [
+            "-u",
+            "${plugin.root}/editor/server.py",
+            "--mods",
+            "${game.mods}",
+            "--probe",
+            "${service.data}",
+            "--output",
+            "${service.data}/output",
+            "--port",
+            "${service.port}",
+            "--instance-token",
+            "${service.token}",
+            "--parent-pid",
+            "${host.pid}"
+          ],
+          "workingDirectory": "${plugin.root}/editor",
+          "dataDirectory": "SSMT_LiquidGravityProbe",
+          "healthPath": "/api/health",
+          "tokenHeader": "X-Editor-Token",
+          "readyTimeoutMs": 45000
+        }
+      }
+    ]
+  },
+  "externalDependencies": [
+    {
+      "id": "python-runtime",
+      "type": "directory",
+      "requiredFiles": [
+        "python.exe"
+      ],
+      "requiredFor": [
+        "local-service"
+      ],
+      "downloadUrl": "https://www.python.org/downloads/windows/",
+      "downloadHint": "Liquid Gravity Probe 使用原版 server.py，需要 Python 3.12 或更高版本。请安装官方 Python，并在下方选择包含 python.exe 的安装目录；不需要 pip 第三方包。"
+    }
+  ],
+  "permissions": [
+    "process.spawn",
+    "filesystem.read",
+    "filesystem.write"
+  ]
+}

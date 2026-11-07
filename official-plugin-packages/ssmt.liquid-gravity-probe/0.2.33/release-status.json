@@ -1,0 +1,8 @@
+{
+  "publish": true,
+  "sourcePaths": [
+    "liquid-gravity-probe-ui",
+    "tools/build-liquid-gravity-probe-ui.ps1",
+    "official-plugin-packages/ssmt.liquid-gravity-probe/0.2.33"
+  ]
+}

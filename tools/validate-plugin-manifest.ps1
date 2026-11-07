@@ -1,4 +1,4 @@
-#Requires -Version 7.0
+﻿#Requires -Version 7.0
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
@@ -66,6 +66,43 @@ function Assert-PackagePath($Value, [string]$Context) {
     }
 }
 
+function Assert-TemplatePath($Value, [string]$Context) {
+    Assert-String $Value $Context
+    if (-not $Value.Contains('${')) {
+        Assert-PackagePath $Value $Context
+        return
+    }
+    foreach ($match in [regex]::Matches($Value, '\$\{([^}]+)\}')) {
+        $variable = $match.Groups[1].Value
+        if ($variable -notmatch '^(plugin\.root|game\.(exe|directory|mods)|external\.[A-Za-z0-9._-]+|service\.(port|token|data)|host\.pid)$') {
+            Fail "$Context contains unsupported template variable: $variable"
+        }
+    }
+    if ($Value -match '\$\{[^}]+\}[^/\\].*:') {
+        Fail "$Context contains an unsafe templated path"
+    }
+}
+
+function Assert-Sha256($Value, [string]$Context) {
+    Assert-String $Value $Context
+    if ($Value -notmatch '^[0-9A-Fa-f]{64}$') { Fail "$Context must be 64 hexadecimal characters" }
+}
+
+function Assert-ResourceKey($Value, [string]$Context) {
+    Assert-String $Value $Context
+    if ($Value.Length -gt 128 -or $Value -notmatch '^[A-Za-z0-9._:-]+$' -or
+        $Value.StartsWith(':') -or $Value.EndsWith(':')) {
+        Fail "$Context is not a valid resource key"
+    }
+}
+
+function Assert-LaunchTarget($Value, [string]$Context) {
+    Assert-PackagePath $Value $Context
+    if ($Value.Replace('\', '/').Split('/') | Where-Object { $_.ToLowerInvariant().StartsWith('.ssmt-') }) {
+        Fail "$Context uses a host-reserved path"
+    }
+}
+
 try {
     $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
 } catch {
@@ -74,12 +111,16 @@ try {
 
 $topLevel = @(
     'schemaVersion', 'id', 'name', 'version', 'author', 'compatibility',
-    'contributions', 'externalDependencies', 'permissions'
+    'contributions', 'externalDependencies', 'permissions', 'pluginApiVersion'
 )
 Assert-Object $manifest 'manifest' $topLevel @(
     'schemaVersion', 'id', 'name', 'version', 'author', 'compatibility', 'contributions'
 )
-if ($manifest.schemaVersion -ne 1) { Fail 'schemaVersion must be 1' }
+if ($manifest.schemaVersion -notin @(1, 2)) { Fail 'schemaVersion must be 1 or 2' }
+if ($null -ne $manifest.PSObject.Properties['pluginApiVersion'] -and
+    $manifest.pluginApiVersion -isnot [int] -and $manifest.pluginApiVersion -isnot [long]) {
+    Fail 'pluginApiVersion must be an integer'
+}
 Assert-PluginId $manifest.id 'id'
 Assert-String $manifest.name 'name'
 Assert-String $manifest.version 'version'
@@ -88,8 +129,14 @@ if ($manifest.version -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') {
 }
 Assert-String $manifest.author 'author'
 
-Assert-Object $manifest.compatibility 'compatibility' @('ssmt', 'platforms', 'games') @('ssmt', 'platforms')
+Assert-Object $manifest.compatibility 'compatibility' @('ssmt', 'pluginApi', 'platforms', 'games') @('ssmt', 'platforms')
 Assert-String $manifest.compatibility.ssmt 'compatibility.ssmt'
+if ($manifest.schemaVersion -eq 2 -and $null -eq $manifest.compatibility.PSObject.Properties['pluginApi']) {
+    Fail 'schemaVersion 2 requires compatibility.pluginApi'
+}
+if ($null -ne $manifest.compatibility.PSObject.Properties['pluginApi']) {
+    Assert-String $manifest.compatibility.pluginApi 'compatibility.pluginApi'
+}
 $platforms = Assert-Array $manifest.compatibility.platforms 'compatibility.platforms'
 if (-not $platforms.Count) { Fail 'compatibility.platforms must not be empty' }
 if (@($platforms | Select-Object -Unique).Count -ne $platforms.Count) {
@@ -106,7 +153,8 @@ if ($null -ne $manifest.compatibility.PSObject.Properties['games']) {
 $contributions = $manifest.contributions
 Assert-Object $contributions 'contributions' @(
     'hostExtensions', 'runtimePlugins', 'injectedDlls',
-    'launcherAdapters', 'externalManagers', 'uiPages'
+    'launcherAdapters', 'externalManagers', 'uiPages', 'pages', 'launchHooks',
+    'dataDirectories', 'migrations', 'graphicsProfiles'
 )
 
 if ($null -ne $contributions.PSObject.Properties['hostExtensions']) {
@@ -177,6 +225,198 @@ if ($null -ne $contributions.PSObject.Properties['uiPages']) {
     }
 }
 
+if ($null -ne $contributions.PSObject.Properties['pages']) {
+    $pageIds = @{}
+    foreach ($page in (Assert-Array $contributions.pages 'contributions.pages')) {
+        Assert-Object $page 'pages[]' @(
+            'kind', 'id', 'title', 'description', 'path', 'fields', 'service'
+        ) @('kind', 'id', 'title')
+        Assert-PluginId $page.id 'pages[].id'
+        Assert-String $page.title 'pages[].title'
+        if ($pageIds.ContainsKey($page.id)) { Fail "duplicate page id: $($page.id)" }
+        $pageIds[$page.id] = $true
+        switch ($page.kind) {
+            'declarative' {
+                foreach ($field in (Assert-Array $page.fields 'pages[].fields')) {
+                    Assert-Object $field 'pages[].fields[]' @(
+                        'key', 'label', 'kind', 'defaultValue', 'description',
+                        'required', 'min', 'max', 'options'
+                    ) @('key', 'label', 'kind')
+                    Assert-PluginId $field.key 'pages[].fields[].key'
+                    Assert-String $field.label 'pages[].fields[].label'
+                    if ($field.kind -notin @('boolean', 'integer', 'string', 'select')) {
+                        Fail "unsupported declarative field kind: $($field.kind)"
+                    }
+                    if ($field.kind -eq 'select') {
+                        $options = Assert-Array $field.options 'pages[].fields[].options'
+                        if (-not $options.Count) { Fail 'select field requires options' }
+                        foreach ($option in $options) {
+                            Assert-Object $option 'pages[].fields[].options[]' @('value', 'label') @('value', 'label')
+                            Assert-String $option.value 'pages[].fields[].options[].value'
+                            Assert-String $option.label 'pages[].fields[].options[].label'
+                        }
+                    }
+                }
+            }
+            'static' {
+                Assert-PackagePath $page.path 'pages[].path'
+            }
+            'local-service' {
+                Assert-PackagePath $page.path 'pages[].path'
+                Assert-Object $page.service 'pages[].service' @(
+                    'executable', 'arguments', 'workingDirectory', 'dataDirectory',
+                    'healthPath', 'tokenHeader', 'readyTimeoutMs'
+                ) @('executable', 'dataDirectory', 'healthPath')
+                Assert-TemplatePath $page.service.executable 'pages[].service.executable'
+                if ($null -ne $page.service.PSObject.Properties['arguments']) {
+                    foreach ($argument in (Assert-Array $page.service.arguments 'pages[].service.arguments')) {
+                        Assert-String $argument 'pages[].service.arguments[]'
+                    }
+                }
+                if ($null -ne $page.service.PSObject.Properties['workingDirectory']) {
+                    Assert-TemplatePath $page.service.workingDirectory 'pages[].service.workingDirectory'
+                }
+                Assert-PackagePath $page.service.dataDirectory 'pages[].service.dataDirectory'
+                if ($page.service.dataDirectory.Contains('/') -or $page.service.dataDirectory.Contains('\')) {
+                    Fail 'pages[].service.dataDirectory must be one path segment'
+                }
+                Assert-String $page.service.healthPath 'pages[].service.healthPath'
+                if (-not $page.service.healthPath.StartsWith('/') -or
+                    $page.service.healthPath.StartsWith('//') -or
+                    $page.service.healthPath.Contains('..') -or
+                    $page.service.healthPath.Contains('://')) {
+                    Fail 'pages[].service.healthPath must be a local absolute URL path'
+                }
+                if ($null -ne $page.service.PSObject.Properties['tokenHeader']) {
+                    Assert-String $page.service.tokenHeader 'pages[].service.tokenHeader'
+                    if ($page.service.tokenHeader -notmatch '^[A-Za-z0-9-]+$') {
+                        Fail 'pages[].service.tokenHeader is invalid'
+                    }
+                }
+                if ($null -ne $page.service.PSObject.Properties['readyTimeoutMs'] -and
+                    ($page.service.readyTimeoutMs -isnot [int] -and $page.service.readyTimeoutMs -isnot [long] -or
+                    $page.service.readyTimeoutMs -lt 1 -or $page.service.readyTimeoutMs -gt 120000)) {
+                    Fail 'pages[].service.readyTimeoutMs must be between 1 and 120000'
+                }
+            }
+            default { Fail "unsupported page kind: $($page.kind)" }
+        }
+    }
+}
+
+if ($null -ne $contributions.PSObject.Properties['launchHooks']) {
+    $hookIds = @{}
+    foreach ($hook in (Assert-Array $contributions.launchHooks 'contributions.launchHooks')) {
+        Assert-Object $hook 'launchHooks[]' @('id', 'priority', 'actions') @('id', 'actions')
+        Assert-PluginId $hook.id 'launchHooks[].id'
+        if ($hookIds.ContainsKey($hook.id)) { Fail "duplicate launch hook id: $($hook.id)" }
+        $hookIds[$hook.id] = $true
+        $actions = Assert-Array $hook.actions 'launchHooks[].actions'
+        if (-not $actions.Count -or $actions.Count -gt 64) { Fail 'launchHooks[].actions must contain 1..64 actions' }
+        foreach ($action in $actions) {
+            Assert-Object $action 'launchHooks[].actions[]' @(
+                'type', 'source', 'target', 'sha256', 'resource', 'expectedTargetSha256', 'values'
+            ) @('type')
+            switch ($action.type) {
+                'file-copy' {
+                    Assert-PackagePath $action.source 'launchHooks[].actions[].source'
+                    Assert-LaunchTarget $action.target 'launchHooks[].actions[].target'
+                    Assert-Sha256 $action.sha256 'launchHooks[].actions[].sha256'
+                    if ($null -ne $action.PSObject.Properties['expectedTargetSha256']) {
+                        Assert-Sha256 $action.expectedTargetSha256 'launchHooks[].actions[].expectedTargetSha256'
+                    }
+                    if ($null -ne $action.PSObject.Properties['resource']) {
+                        Assert-ResourceKey $action.resource 'launchHooks[].actions[].resource'
+                    }
+                }
+                'file-remove' {
+                    Assert-LaunchTarget $action.target 'launchHooks[].actions[].target'
+                    if ($null -ne $action.PSObject.Properties['expectedTargetSha256']) {
+                        Assert-Sha256 $action.expectedTargetSha256 'launchHooks[].actions[].expectedTargetSha256'
+                    }
+                    if ($null -ne $action.PSObject.Properties['resource']) {
+                        Assert-ResourceKey $action.resource 'launchHooks[].actions[].resource'
+                    }
+                }
+                'argument-append' {
+                    $values = Assert-Array $action.values 'launchHooks[].actions[].values'
+                    if (-not $values.Count -or $values.Count -gt 32) { Fail 'argument-append requires 1..32 values' }
+                    foreach ($value in $values) { Assert-String $value 'launchHooks[].actions[].values[]' }
+                }
+                default { Fail "unsupported launch action type: $($action.type)" }
+            }
+        }
+    }
+}
+
+if ($null -ne $contributions.PSObject.Properties['dataDirectories']) {
+    $dataIds = @{}
+    foreach ($data in (Assert-Array $contributions.dataDirectories 'contributions.dataDirectories')) {
+        Assert-Object $data 'dataDirectories[]' @(
+            'id', 'packagePath', 'seedFromPackage', 'mirrorOnLaunch'
+        ) @('id', 'packagePath')
+        Assert-PluginId $data.id 'dataDirectories[].id'
+        if ($dataIds.ContainsKey($data.id)) { Fail "duplicate data directory id: $($data.id)" }
+        $dataIds[$data.id] = $true
+        Assert-PackagePath $data.packagePath 'dataDirectories[].packagePath'
+        if ($data.packagePath.Replace('\', '/').ToLowerInvariant().StartsWith('plugin/')) {
+            Fail 'dataDirectories[].packagePath must not overlap runtime plugin files'
+        }
+        foreach ($key in @('seedFromPackage', 'mirrorOnLaunch')) {
+            if ($null -ne $data.PSObject.Properties[$key] -and $data.$key -isnot [bool]) {
+                Fail "dataDirectories[].$key must be a boolean"
+            }
+        }
+    }
+}
+
+if ($null -ne $contributions.PSObject.Properties['migrations']) {
+    $migrationIds = @{}
+    foreach ($migration in (Assert-Array $contributions.migrations 'contributions.migrations')) {
+        Assert-Object $migration 'migrations[]' @('id', 'source', 'keys') @('id', 'source', 'keys')
+        Assert-PluginId $migration.id 'migrations[].id'
+        if ($migrationIds.ContainsKey($migration.id)) { Fail "duplicate migration id: $($migration.id)" }
+        $migrationIds[$migration.id] = $true
+        if ($migration.source -ne 'game-config') { Fail "unsupported migration source: $($migration.source)" }
+        $keys = Assert-Array $migration.keys 'migrations[].keys'
+        if (-not $keys.Count -or $keys.Count -gt 32) { Fail 'migrations[].keys must contain 1..32 keys' }
+        foreach ($key in $keys) {
+            Assert-String $key 'migrations[].keys[]'
+            if ($key -notmatch '^[A-Za-z0-9._-]+$') { Fail "invalid migration key: $key" }
+        }
+    }
+}
+
+if ($null -ne $contributions.PSObject.Properties['graphicsProfiles']) {
+    $graphicsIds = @{}
+    foreach ($profile in (Assert-Array $contributions.graphicsProfiles 'contributions.graphicsProfiles')) {
+        Assert-Object $profile 'graphicsProfiles[]' @(
+            'id', 'strategy', 'priority', 'config', 'settingsComponent', 'resources'
+        ) @('id', 'strategy', 'resources')
+        Assert-PluginId $profile.id 'graphicsProfiles[].id'
+        if ($graphicsIds.ContainsKey($profile.id)) { Fail "duplicate graphics profile id: $($profile.id)" }
+        $graphicsIds[$profile.id] = $true
+        if ($profile.strategy -notin @('reshade-hot', 'dlss5-hot')) {
+            Fail "unsupported graphics strategy: $($profile.strategy)"
+        }
+        if ($null -ne $profile.PSObject.Properties['priority'] -and
+            ($profile.priority -isnot [int] -and $profile.priority -isnot [long])) {
+            Fail 'graphicsProfiles[].priority must be an integer'
+        }
+        if ($null -ne $profile.PSObject.Properties['config']) {
+            Assert-PackagePath $profile.config 'graphicsProfiles[].config'
+        }
+        if ($null -ne $profile.PSObject.Properties['settingsComponent']) {
+            Assert-PluginId $profile.settingsComponent 'graphicsProfiles[].settingsComponent'
+        }
+        $resources = Assert-Array $profile.resources 'graphicsProfiles[].resources'
+        if (-not $resources.Count) { Fail 'graphicsProfiles[].resources must not be empty' }
+        foreach ($resource in $resources) {
+            Assert-ResourceKey $resource 'graphicsProfiles[].resources[]'
+        }
+    }
+}
+
 if ($null -ne $manifest.PSObject.Properties['externalDependencies']) {
     foreach ($dependency in (Assert-Array $manifest.externalDependencies 'externalDependencies')) {
         Assert-Object $dependency 'externalDependencies[]' @(
@@ -218,6 +458,51 @@ if ($null -ne $manifest.PSObject.Properties['permissions']) {
     }
     foreach ($permission in $permissions) {
         if ($permission -notin $allowedPermissions) { Fail "unsupported permission: $permission" }
+    }
+}
+
+$permissionSet = @{}
+if ($null -ne $manifest.PSObject.Properties['permissions']) {
+    foreach ($permission in @($manifest.permissions)) { $permissionSet[[string]$permission] = $true }
+}
+if ($null -ne $contributions.PSObject.Properties['pages']) {
+    foreach ($page in @($contributions.pages)) {
+        if ($page.kind -eq 'local-service' -and -not $permissionSet.ContainsKey('process.spawn')) {
+            Fail 'local-service pages require process.spawn permission'
+        }
+    }
+}
+if ($null -ne $contributions.PSObject.Properties['launchHooks']) {
+    foreach ($hook in @($contributions.launchHooks)) {
+        foreach ($action in @($hook.actions)) {
+            if ($action.type -eq 'file-copy' -and
+                (-not $permissionSet.ContainsKey('filesystem.read') -or -not $permissionSet.ContainsKey('filesystem.write'))) {
+                Fail 'file-copy launch actions require filesystem.read and filesystem.write'
+            }
+            if ($action.type -eq 'file-remove' -and -not $permissionSet.ContainsKey('filesystem.write')) {
+                Fail 'file-remove launch actions require filesystem.write'
+            }
+            if ($action.type -eq 'argument-append' -and -not $permissionSet.ContainsKey('game.launch')) {
+                Fail 'argument-append launch actions require game.launch'
+            }
+        }
+    }
+}
+if ($null -ne $contributions.PSObject.Properties['dataDirectories']) {
+    if (-not $permissionSet.ContainsKey('filesystem.read') -or -not $permissionSet.ContainsKey('filesystem.write')) {
+        Fail 'dataDirectories require filesystem.read and filesystem.write'
+    }
+}
+if ($null -ne $contributions.PSObject.Properties['migrations']) {
+    if (-not $permissionSet.ContainsKey('filesystem.read')) {
+        Fail 'migrations require filesystem.read'
+    }
+}
+if ($null -ne $contributions.PSObject.Properties['graphicsProfiles']) {
+    foreach ($permission in @('native.inject', 'filesystem.read', 'filesystem.write')) {
+        if (-not $permissionSet.ContainsKey($permission)) {
+            Fail "graphicsProfiles require $permission"
+        }
     }
 }
 
