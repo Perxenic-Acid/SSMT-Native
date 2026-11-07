@@ -8,6 +8,7 @@
 namespace SSMT::Tweaks::Genshin::CameraTweaks
 {
     inline constexpr std::size_t SceneCameraFadeWriteOffset = 0x35E;
+    inline constexpr std::size_t SceneCameraFadeWriteOffsetNov2026 = 0x361;
 
     bool ValidateSceneCameraFade(const PatternScanner &scanner, std::uintptr_t address);
     std::array<std::uint8_t, 26> MakeSceneCameraFadeDetour(std::uintptr_t original);

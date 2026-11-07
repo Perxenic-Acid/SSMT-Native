@@ -53,6 +53,33 @@ namespace SSMT::Tweaks::Genshin::CameraTweaks
     {
         // 7.1 CN/Bilibili：角色展示场景从镜头到模型骨骼的距离算出淡出值，直接写入
         // 渲染组件，绕过 PlayerPerspective。只核对这个路径，不能替换通用显隐 setter。
+        // New layout distinguished by actual on-disk/live code, NOT a fixed RVA.
+        // Every IFix guard remains active; unknown flags reject hooks.
+        if (Match(scanner, address + 0x99,
+                "F3 44 0F 10 35 ?? ?? ?? ?? 80 BF 58 01 00 00 00"))
+            return InactiveHotfix(scanner, address + 0x8C, address + 0x402) &&
+                InactiveHotfix(scanner, address + 0x354, address + 0x459) &&
+                Match(scanner, address + 0x99,
+                    "F3 44 0F 10 35 ?? ?? ?? ?? 80 BF 58 01 00 00 00") &&
+                FloatConstant(scanner, address + 0x99, 5, 9, 0xBF800000) &&
+                Match(scanner, address + 0x145,
+                    "F3 44 0F 5C 4C 24 34 F3 44 0F 5E 4E 28") &&
+                Match(scanner, address + 0x297,
+                    "0F 59 D2 F3 0F 58 CA F3 0F 16 C2 F3 0F 58 C1 41 0F 2E C4") &&
+                Match(scanner, address + 0x311,
+                    "4C 8B 05 ?? ?? ?? ?? BA 01 70 01 00 E8 ?? ?? ?? ?? 48 85 C0 74 68") &&
+                Match(scanner, address + 0x32A,
+                    "F3 0F 10 46 18 F3 0F 5C F0 F3 44 0F 5C C0 F3 41 0F 5E F0 "
+                    "F3 0F 10 05 ?? ?? ?? ?? F3 0F 5D C6 0F 57 C9 F3 0F C2 F1 01 0F 55 F0") &&
+                FloatConstant(scanner, address + 0x33D, 4, 8, 0x3F800000) &&
+                Match(scanner, address + SceneCameraFadeWriteOffsetNov2026,
+                    "0F 2E B7 5C 01 00 00 0F 9A C0 0F 95 C1 08 C1 08 8F 7A 01 00 00 "
+                    "F3 0F 11 B7 5C 01 00 00 48 89 F9 E8 ?? ?? ?? ?? F3 44 0F 10 B7 5C 01 00 00") &&
+                scanner.ResolveRelativeBranch(address + 0x381) != 0 &&
+                Match(scanner, address + 0x38F,
+                    "41 0F 28 C6 0F 28 74 24 60 0F 28 7C 24 70") &&
+                Match(scanner, address + 0x3DC,
+                    "48 81 C4 F8 00 00 00 5B 5D 5F 5E 41 5E 41 5F C3");
         return InactiveHotfix(scanner, address + 0x8C, address + 0x3FF) &&
             InactiveHotfix(scanner, address + 0x351, address + 0x456) &&
             Match(scanner, address + 0x99,
@@ -100,7 +127,10 @@ namespace SSMT::Tweaks::Genshin::CameraTweaks
                 << (symbol ? "camera fade layout or IFix state changed" : symbol.validation) << '\n';
             return false;
         }
-        const auto target = symbol.address + SceneCameraFadeWriteOffset;
+        const bool newLayout = Match(scanner, symbol.address + 0x99,
+            "F3 44 0F 10 35 ?? ?? ?? ?? 80 BF 58 01 00 00 00");
+        const auto target = symbol.address + (newLayout
+            ? SceneCameraFadeWriteOffsetNov2026 : SceneCameraFadeWriteOffset);
         void *code = nullptr;
         bool created = false;
         try

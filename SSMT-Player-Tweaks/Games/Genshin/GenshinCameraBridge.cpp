@@ -108,6 +108,11 @@ namespace SSMT::Tweaks::Genshin
             bridge.zoomRadiusUpdate = ResolveSymbol(scanner, Patterns::ZoomRadiusUpdate, ResolverKind::Direct, ValidateRadiusUpdate);
             bridge.zoomRadiusSmoothDamp = ResolveSymbol(scanner, Patterns::ZoomRadiusSmoothDamp, ResolverKind::Direct, ValidateRadiusSmoothDamp);
             bridge.zoomCollectAvatarState = ResolveSymbol(scanner, Patterns::ZoomCollectAvatarState, ResolverKind::Direct, ValidateCollectAvatarState);
+            // Only fall back when the old AOB has zero matches; the alternative
+            // has its own full semantic validator and uniqueness requirement.
+            if (!bridge.zoomCollectAvatarState && bridge.zoomCollectAvatarState.candidates == 0)
+                bridge.zoomCollectAvatarState = ResolveSymbol(scanner, Patterns::ZoomCollectAvatarStateNov2026,
+                    ResolverKind::Direct, ValidateCollectAvatarState);
             LogSymbol(log, "InputZoomTick", bridge.inputZoomTick, scanner);
             LogSymbol(log, "InputZoomAdjust", bridge.inputZoomAdjust, scanner);
             LogSymbol(log, "UpdateManualLocateRatio", bridge.updateManualLocateRatio, scanner);

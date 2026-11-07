@@ -51,6 +51,12 @@ namespace SSMT::Tweaks::Genshin::Patterns
         "48 8B 47 18 48 85 C0 74 ?? 48 8B 00 48 3B 05 ?? ?? ?? ?? 74 ?? "
         "48 89 F1 48 83 C4 60 5B 5D 5F 5E 41 5E E9 ?? ?? ?? ??";
 
+    inline constexpr std::string_view ZoomCollectAvatarStateNov2026 =
+        "41 56 56 57 55 53 48 83 EC 60 4C 89 C3 48 89 D6 48 89 CF "
+        "80 3D ?? ?? ?? ?? 00 0F 85 ?? ?? ?? ?? "
+        "48 8B 47 10 48 85 C0 74 ?? 48 8B 00 48 3B 05 ?? ?? ?? ?? 74 ?? "
+        "48 89 F1 48 83 C4 60 5B 5D 5F 5E 41 5E E9 ?? ?? ?? ??";
+
     inline constexpr std::string_view ChangeFov =
         "40 53 48 83 EC 60 0F 29 74 24 ?? 48 8B D9 0F 28 F1 "
         "E8 ?? ?? ?? ?? 48 85 C0 0F 84 ?? ?? ?? ?? "
@@ -123,6 +129,23 @@ namespace SSMT::Tweaks::Genshin::Patterns
         "74 47 "
         "48 8B 3D ?? ?? ?? ?? "
         "48 85 DF 74 4C";
+
+    // 2026-11-06 Bilibili YuanShen.exe candidate; use only with unique match.
+    // CheckCanEnter disambiguation: the second generic prologue uses mov rax,
+    // while the intended candidate is followed by mov rcx and a distinct state path.
+    inline constexpr std::string_view CheckCanEnterNov2026 =
+        "56 48 81 EC 80 00 00 00 80 3D ?? ?? ?? ?? 00 "
+        "0F 84 ?? ?? ?? ?? 80 3D ?? ?? ?? ?? 00 "
+        "48 8B 0D ?? ?? ?? ?? 0F 85 ?? ?? ?? ?? "
+        "48 8B 81 A0 A3 00 00 48 85 C0";
+
+    // Old OpenTeam signature expected short JZ (74 xx); current binary uses
+    // near JZ (0F 84 xxxx), but still calls team selector with ecx=12.
+    inline constexpr std::string_view OpenTeamNov2026 =
+        "48 83 EC 28 80 3D ?? ?? ?? ?? 00 75 ?? "
+        "48 8B 0D ?? ?? ?? ?? 80 B9 C7 00 00 00 00 "
+        "0F 84 ?? ?? ?? ?? B9 0C 00 00 00 E8 ?? ?? ?? ?? 84 C0 75 ?? "
+        "48 8B 05 ?? ?? ?? ?? 48 8B 88 60 9E 00 00";
 
     inline constexpr std::string_view OpenTeamPage =
         "56 57 53 48 83 EC 20 "

@@ -72,7 +72,13 @@ namespace SSMT::Tweaks::Genshin::CameraTweaks
         if (!ValidateHotfixGuard(scanner, address + entryGuard,
             function == ZoomFunction::UpdateManualRatio || function == ZoomFunction::ScriptedManualRatio)) return false;
 
-        for (const auto &site : ZoomClampSites)
+        const bool newInputLayout = function == ZoomFunction::InputTick &&
+            MatchPattern(scanner, address + 0x50B, ZoomClampSitesNov2026[0].pattern,
+                ZoomClampSitesNov2026[0].size);
+        const bool newCollectLayout = function == ZoomFunction::CollectAvatarState &&
+            MatchPattern(scanner, address + 0x20, "48 8B 47 10", 4);
+        const auto &sites = newInputLayout ? ZoomClampSitesNov2026 : ZoomClampSites;
+        for (const auto &site : sites)
         {
             if (site.function != function) continue;
             const auto target = address + site.offset;
@@ -101,9 +107,9 @@ namespace SSMT::Tweaks::Genshin::CameraTweaks
         }
         // 输入仍由原生速度 * deltaTime 积分，末尾仍使用原生标尺并写入半径。
         if (function == ZoomFunction::InputTick)
-            return MatchPattern(scanner, address + 0x5CA,
+            return MatchPattern(scanner, address + (newInputLayout ? 0x5FE : 0x5CA),
                 "F2 0F 10 8E 28 05 00 00 F2 0F 59 CE F2 0F 58 8E 48 04 00 00", 20) &&
-                MatchPattern(scanner, address + 0x73B,
+                MatchPattern(scanner, address + (newInputLayout ? 0x772 : 0x73B),
                     "F2 44 0F 59 86 98 04 00 00 F2 44 0F 11 86 10 02 00 00", 18);
         if (function == ZoomFunction::UpdateManualRatio)
             return MatchPattern(scanner, address + 0x40, "F2 0F 11 8E 48 04 00 00 48 83 C4 20 5E C3", 14);
@@ -141,6 +147,23 @@ namespace SSMT::Tweaks::Genshin::CameraTweaks
             return MatchPattern(scanner, address + 0x4D, "F2 41 0F 5C D8", 5) &&
                 MatchPattern(scanner, address + 0xD9,
                     "F2 0F 11 16 F2 0F 58 C8 F2 0F 59 CC F2 41 0F 58 C8 66 0F 28 C1", 21);
+        if (function == ZoomFunction::CollectAvatarState && newCollectLayout)
+            return ValidateHotfixGuard(scanner, address + 0xA4, false) &&
+                ValidateHotfixGuard(scanner, address + 0xB1, false) &&
+                MatchPattern(scanner, address + 0x47,
+                    "0F B6 86 C0 04 00 00 88 86 C1 04 00 00", 13) &&
+                MatchPattern(scanner, address + 0x5D,
+                    "48 8B 43 78 45 31 F6 48 85 C0 74 09 0F B6 80 43 05 00 00 EB 02 31 C0 88 86 C0 04 00 00", 29) &&
+                MatchPattern(scanner, address + 0x166,
+                    "80 BE C1 04 00 00 00 75 6A EB 33", 11) &&
+                MatchPattern(scanner, address + 0x19B,
+                    "80 BE C1 04 00 00 00 75 35", 9) &&
+                MatchPattern(scanner, address + 0x1A4,
+                    "80 BE C0 04 00 00 00 74 2C 48 85 C0 0F 84 ?? ?? ?? ?? "
+                    "80 B8 40 05 00 00 00 74 1A 80 B8 44 05 00 00 00 75 11 "
+                    "48 B8 00 00 00 00 00 00 F0 3F", 46) &&
+                MatchPattern(scanner, address + 0x1D9,
+                    "8B 86 D8 04 00 00 48 8B 8E D0 04 00 00", 13);
         if (function == ZoomFunction::CollectAvatarState)
             // 同时确认上一帧/当前聚焦状态、配置门控及精确的 1.0 重置。
             // 保留整段原生聚焦逻辑，仅跳过最后的手动比例写入。
@@ -222,6 +245,11 @@ namespace SSMT::Tweaks::Genshin::CameraTweaks
             return false;
         }
 
+        // Selection happens after ValidateZoomFunction() has passed for all
+        // required symbols. Both tables retain 13 entries and IFix checks.
+        const auto &sites = MatchPattern(scanner, bridge.inputZoomTick.address + 0x50B,
+            ZoomClampSitesNov2026[0].pattern, ZoomClampSitesNov2026[0].size)
+            ? ZoomClampSitesNov2026 : ZoomClampSites;
         constexpr std::size_t stride = 64;
         constexpr std::size_t codeSize = stride * ZoomClampSites.size();
         auto *code = static_cast<std::uint8_t *>(VirtualAlloc(nullptr, codeSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
@@ -234,9 +262,9 @@ namespace SSMT::Tweaks::Genshin::CameraTweaks
         std::size_t created = 0;
         try
         {
-            for (std::size_t i = 0; i < ZoomClampSites.size(); ++i)
+            for (std::size_t i = 0; i < sites.size(); ++i)
             {
-                const auto &site = ZoomClampSites[i];
+                const auto &site = sites[i];
                 targets[i] = Symbol(bridge, site.function).address + site.offset;
                 if (site.function == ZoomFunction::RadiusSmoothDamp)
                 {
@@ -259,7 +287,7 @@ namespace SSMT::Tweaks::Genshin::CameraTweaks
                 void *original = nullptr;
                 HookManager::CreateDisabled(targets[i], code + i * stride, &original);
                 ++created;
-                if (ZoomClampSites[i].function == ZoomFunction::RadiusSmoothDamp)
+                if (sites[i].function == ZoomFunction::RadiusSmoothDamp)
                 {
                     if (!VirtualProtect(code, codeSize, PAGE_READWRITE, &previous))
                         throw std::runtime_error("scoped detour write protection failed");

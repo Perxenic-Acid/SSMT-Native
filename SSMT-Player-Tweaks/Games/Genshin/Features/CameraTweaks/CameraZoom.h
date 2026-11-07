@@ -59,6 +59,19 @@ namespace SSMT::Tweaks::Genshin::CameraTweaks
             "48 89 86 48 04 00 00", false, 0x13, false, true},
     }};
 
+    // 2026-11-06 Bilibili executable (SHA-256 8b014f64...21dbd6b5).
+    // Five InputTick sites moved; every site is STILL checked by its
+    // original exact pattern and runtime IFix flag before any hook is created.
+    inline constexpr auto ZoomClampSitesNov2026 = [] {
+        auto sites = ZoomClampSites;
+        sites[0].offset = 0x50B; sites[0].guardOffset = 0x4FE;
+        sites[1].offset = 0x585; sites[1].guardOffset = 0x578;
+        sites[2].offset = 0x62C; sites[2].guardOffset = 0x61F;
+        sites[3].offset = 0x72C; sites[3].guardOffset = 0x71F;
+        sites[4].offset = 0x761; sites[4].guardOffset = 0x754;
+        return sites;
+    }();
+
     bool ValidateZoomFunction(const PatternScanner &scanner, std::uintptr_t address, ZoomFunction function);
     std::array<std::uint8_t, 19> MakeZoomClampDetour(const ZoomClampSite &site, std::uintptr_t continuation);
     std::array<std::uint8_t, 64> MakeScopedZoomClampDetour(const ZoomClampSite &site,
