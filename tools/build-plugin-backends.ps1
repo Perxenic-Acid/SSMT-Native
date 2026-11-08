@@ -4,6 +4,7 @@ param(
     [ValidateSet('player-tweaks', 'hoyoshade', 'dlss5')]
     [string[]]$Backends = @('player-tweaks', 'hoyoshade', 'dlss5'),
     [string]$ArtifactDirectory = (Join-Path $PSScriptRoot '..\dist\Release'),
+    [bool]$PrepareRuntimeComponents = $true,
     [switch]$Release
 )
 $ErrorActionPreference = 'Stop'
@@ -21,6 +22,10 @@ foreach ($backend in $Backends) {
     Copy-Item -LiteralPath (Join-Path $repo "target\$profile\$name") -Destination (Join-Path $destination $name)
 }
 if ('dlss5' -in $Backends) {
+    if ($PrepareRuntimeComponents) {
+        & (Join-Path $PSScriptRoot 'stage-optiscaler.ps1') -ArtifactDirectory $destination
+        if (-not $?) { throw '插件固定组件准备失败' }
+    }
     & (Join-Path $PSScriptRoot 'build-dlss5-ui.ps1') -ArtifactDirectory $destination
     if (-not $?) { throw '插件页面构建失败' }
 }

@@ -27,7 +27,7 @@ try {
                 })
             }
             # 新版本增加辅助组件时，只跳过该版本，已构建的其他版本仍可用于本地验证。
-            if ($missing.Count) { Write-Warning "跳过尚未构建的插件：$($plugin.Name) $($version.Name)"; continue }
+            if ($missing.Count) { Write-Warning "跳过尚未构建的插件：$($plugin.Name) $($version.Name)；缺少：$((@($missing | ForEach-Object { if ($_.source) { $_.source } else { $_.path } })) -join ', ')"; continue }
             & (Join-Path $PSScriptRoot 'pack-official-plugins.ps1') -ReleaseTag local-build `
                 -DevelopmentPluginId $plugin.Name -PluginVersion $version.Name -LocalBuild `
                 -NativeArtifactDirectory $artifactRoot -OutputDirectory $temporaryRoot | Out-Null

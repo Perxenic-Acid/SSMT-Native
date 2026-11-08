@@ -1,3 +1,4 @@
+mod config_form;
 mod settings;
 mod star_rail;
 
@@ -19,6 +20,9 @@ fn dispatch(request: &Value) -> Result<Value, String> {
     let context =
         request.get("context").ok_or("缺少宿主上下文")?;
     match method {
+        "settings.schema" => {
+            Ok(config_form::describe(context))
+        }
         "settings.read" => settings::read(context),
         "settings.save" => {
             settings::save(context, &request["payload"])

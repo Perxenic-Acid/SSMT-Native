@@ -1,0 +1,12 @@
+{
+  "files": [
+    {
+      "source": "ssmt-player-tweaks-backend.exe",
+      "destination": "backend/ssmt-player-tweaks-backend.exe"
+    },
+    {
+      "source": "SSMT-Player-Tweaks.dll",
+      "destination": "runtime/SSMT-Player-Tweaks.dll"
+    }
+  ]
+}

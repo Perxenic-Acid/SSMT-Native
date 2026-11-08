@@ -250,7 +250,7 @@ if ($null -ne $contributions.PSObject.Properties['pages']) {
     $pageIds = @{}
     foreach ($page in (Assert-Array $contributions.pages 'contributions.pages')) {
         Assert-Object $page 'pages[]' @(
-            'kind', 'id', 'title', 'description', 'path', 'fields', 'service'
+            'kind', 'id', 'title', 'description', 'path', 'fields', 'service', 'backendConfig'
         ) @('kind', 'id', 'title')
         Assert-PluginId $page.id 'pages[].id'
         Assert-String $page.title 'pages[].title'
@@ -258,6 +258,14 @@ if ($null -ne $contributions.PSObject.Properties['pages']) {
         $pageIds[$page.id] = $true
         switch ($page.kind) {
             'declarative' {
+                if ($page.backendConfig) {
+                    Assert-Object $page.backendConfig 'pages[].backendConfig' @('schemaMethod', 'readMethod', 'saveMethod') @('schemaMethod', 'readMethod', 'saveMethod')
+                    foreach ($name in @('schemaMethod', 'readMethod', 'saveMethod')) {
+                        Assert-PluginId $page.backendConfig.$name "pages[].backendConfig.$name"
+                        if (-not $contributions.backend -or $page.backendConfig.$name -cnotin @($contributions.backend.methods)) { Fail 'backendConfig method is not declared' }
+                    }
+                    if (@($page.fields).Count) { Fail 'backendConfig cannot be mixed with inline fields' }
+                }
                 foreach ($field in (Assert-Array $page.fields 'pages[].fields')) {
                     Assert-Object $field 'pages[].fields[]' @(
                         'key', 'label', 'kind', 'defaultValue', 'description',

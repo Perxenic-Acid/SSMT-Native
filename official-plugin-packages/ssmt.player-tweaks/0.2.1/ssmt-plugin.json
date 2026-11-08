@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 2,
+  "id": "ssmt.player-tweaks",
+  "name": "SSMT Player Tweaks",
+  "version": "0.2.1",
+  "author": "SSMT",
+  "compatibility": {
+    "ssmt": ">=4.2.2",
+    "pluginApi": ">=1.2.0 <2.0.0",
+    "platforms": [
+      "windows-x64"
+    ],
+    "games": [
+      "GIMI",
+      "SRMI"
+    ]
+  },
+  "contributions": {
+    "backend": {
+      "executable": "backend/ssmt-player-tweaks-backend.exe",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "methods": [
+        "settings.read",
+        "settings.save",
+        "settings.schema"
+      ],
+      "events": [
+        "prepare",
+        "cancel",
+        "disabled",
+        "recover"
+      ]
+    },
+    "pages": [
+      {
+        "kind": "declarative",
+        "id": "settings",
+        "title": "Player Tweaks",
+        "fields": [],
+        "backendConfig": {
+          "schemaMethod": "settings.schema",
+          "readMethod": "settings.read",
+          "saveMethod": "settings.save"
+        }
+      }
+    ],
+    "injectedDlls": [
+      {
+        "path": "runtime/SSMT-Player-Tweaks.dll",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "executableNames": [
+          "YuanShen.exe",
+          "GenshinImpact.exe"
+        ]
+      }
+    ],
+    "migrations": [
+      {
+        "id": "legacy-game-config",
+        "source": "game-config",
+        "keys": [
+          "playerTweaksCamera",
+          "playerTweaksGameplay"
+        ]
+      }
+    ]
+  },
+  "permissions": [
+    "process.spawn",
+    "process.observe",
+    "filesystem.read",
+    "filesystem.write",
+    "native.inject"
+  ],
+  "externalDependencies": []
+}
