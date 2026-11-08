@@ -154,7 +154,7 @@ $contributions = $manifest.contributions
 Assert-Object $contributions 'contributions' @(
     'hostExtensions', 'runtimePlugins', 'injectedDlls',
     'launcherAdapters', 'externalManagers', 'uiPages', 'pages', 'launchHooks',
-    'dataDirectories', 'migrations', 'graphicsProfiles', 'backend'
+    'dataDirectories', 'migrations', 'backend'
 )
 
 if ($null -ne $contributions.PSObject.Properties['backend']) {
@@ -408,35 +408,7 @@ if ($null -ne $contributions.PSObject.Properties['migrations']) {
     }
 }
 
-if ($null -ne $contributions.PSObject.Properties['graphicsProfiles']) {
-    $graphicsIds = @{}
-    foreach ($profile in (Assert-Array $contributions.graphicsProfiles 'contributions.graphicsProfiles')) {
-        Assert-Object $profile 'graphicsProfiles[]' @(
-            'id', 'strategy', 'priority', 'config', 'settingsComponent', 'resources'
-        ) @('id', 'strategy', 'resources')
-        Assert-PluginId $profile.id 'graphicsProfiles[].id'
-        if ($graphicsIds.ContainsKey($profile.id)) { Fail "duplicate graphics profile id: $($profile.id)" }
-        $graphicsIds[$profile.id] = $true
-        if ($profile.strategy -notin @('reshade-hot', 'dlss5-hot')) {
-            Fail "unsupported graphics strategy: $($profile.strategy)"
-        }
-        if ($null -ne $profile.PSObject.Properties['priority'] -and
-            ($profile.priority -isnot [int] -and $profile.priority -isnot [long])) {
-            Fail 'graphicsProfiles[].priority must be an integer'
-        }
-        if ($null -ne $profile.PSObject.Properties['config']) {
-            Assert-PackagePath $profile.config 'graphicsProfiles[].config'
-        }
-        if ($null -ne $profile.PSObject.Properties['settingsComponent']) {
-            Assert-PluginId $profile.settingsComponent 'graphicsProfiles[].settingsComponent'
-        }
-        $resources = Assert-Array $profile.resources 'graphicsProfiles[].resources'
-        if (-not $resources.Count) { Fail 'graphicsProfiles[].resources must not be empty' }
-        foreach ($resource in $resources) {
-            Assert-ResourceKey $resource 'graphicsProfiles[].resources[]'
-        }
-    }
-}
+
 
 if ($null -ne $manifest.PSObject.Properties['externalDependencies']) {
     foreach ($dependency in (Assert-Array $manifest.externalDependencies 'externalDependencies')) {
@@ -519,12 +491,6 @@ if ($null -ne $contributions.PSObject.Properties['migrations']) {
         Fail 'migrations require filesystem.read'
     }
 }
-if ($null -ne $contributions.PSObject.Properties['graphicsProfiles']) {
-    foreach ($permission in @('native.inject', 'filesystem.read', 'filesystem.write')) {
-        if (-not $permissionSet.ContainsKey($permission)) {
-            Fail "graphicsProfiles require $permission"
-        }
-    }
-}
+
 
 Write-Output "VALID_MANIFEST=$manifestPath"

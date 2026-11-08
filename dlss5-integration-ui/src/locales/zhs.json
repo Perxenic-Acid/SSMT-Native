@@ -1,0 +1,42 @@
+{
+  "gameSettingsModal": {
+    "tabs": {},
+    "common": {},
+    "fields": {
+      "graphicsStack": "当前游戏图形栈",
+      "graphicsManagedState": "DLSS5 Route：{route}；配置所有者：{owner}",
+      "graphicsInstalledOnly": "仅确认文件已安装，不能据此判断 DLSS5 已生效。最近一次运行",
+      "graphicsRuntime_bridge_stopped": "DX11 Bridge 初始化失败或已停止，神经渲染未生效",
+      "graphicsRuntime_feeder_stopped": "Feeder 已停止，神经渲染未生效",
+      "graphicsRuntime_d3d11_interposer_race": "Feeder 因 DX11 多线程保护不可用且 Present 路径存在插层而停止；神经渲染未生效",
+      "graphicsRuntime_nr_evaluated": "日志报告 NR 已执行；请核对持续增长的帧数",
+      "graphicsRuntime_feature18_evaluated": "ReShade 日志记录了 Feature 18 成功执行；请核对后续帧数是否持续增长",
+      "graphicsRuntime_depth_source_mismatch": "当前深度缓冲尺寸与画面不一致，可能选中了阴影图集；请在 ReShade 的 Add-ons → Generic Depth 中选择与画面分辨率匹配的候选项",
+      "graphicsRuntime_no_dlss_create": "未检测到 DLSS 创建，神经渲染未生效",
+      "graphicsRuntime_no_nr_evidence": "日志中没有神经渲染成功的证据",
+      "graphicsRuntime_no_log": "没有运行日志",
+      "graphicsRuntime_log_precedes_install": "当前安装尚无运行日志",
+      "graphicsBrokenState": "DLSS5 状态损坏",
+      "graphicsNotManagedState": "未检测到 DLSS5 安装",
+      "graphicsRoutes": "Swapper 可选 Route：{routes}",
+      "graphicsApi": "图形 API",
+      "graphicsApiAuto": "自动识别 API",
+      "graphicsRoute": "DLSS5 Route"
+    },
+    "options": {},
+    "placeholders": {},
+    "actions": {
+      "refreshGraphicsState": "刷新图形栈",
+      "installGraphicsRoute": "安装托管 Route",
+      "migrateGraphicsRoute": "恢复原安装并迁移",
+      "restoreGraphicsRoute": "恢复 Swapper 原始文件",
+      "openSwapper": "在 Swapper 中安装"
+    },
+    "messages": {
+      "graphicsAntiCheatConfirm": "Swapper 检测到此游戏使用反作弊组件。继续安装图形插件可能受到游戏规则限制；确认继续？",
+      "graphicsInstalled": "已为当前游戏安装 DLSS5 Route：{route}",
+      "graphicsRestored": "已恢复 Swapper 管理的游戏文件。"
+    },
+    "other": {}
+  }
+}

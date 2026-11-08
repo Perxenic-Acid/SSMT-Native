@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "assets": "host/assets.json",
+  "gimiAssets": "host/gimi-assets.json",
+  "routes": [
+    {
+      "preset": "GIMI",
+      "executables": [
+        "YuanShen.exe",
+        "GenshinImpact.exe"
+      ],
+      "route": "feeder",
+      "api": "d3d11",
+      "requiredLaunchArgs": [],
+      "excludedLaunchArgs": []
+    },
+    {
+      "preset": "SRMI",
+      "executables": [
+        "StarRail.exe"
+      ],
+      "route": "feeder",
+      "api": "d3d11",
+      "requiredLaunchArgs": [],
+      "excludedLaunchArgs": []
+    },
+    {
+      "preset": "WWMI",
+      "executables": [
+        "Client-Win64-Shipping.exe"
+      ],
+      "route": "native-bridge",
+      "api": "d3d11",
+      "requiredLaunchArgs": [
+        "-dx11"
+      ],
+      "excludedLaunchArgs": [
+        "-dx11",
+        "-d3d11",
+        "-dx12",
+        "-d3d12",
+        "-vulkan"
+      ]
+    },
+    {
+      "preset": "ZZMI",
+      "executables": [
+        "ZenlessZoneZero.exe"
+      ],
+      "route": "native-bridge",
+      "api": "d3d11",
+      "requiredLaunchArgs": [],
+      "excludedLaunchArgs": []
+    },
+    {
+      "preset": "ZZMIDX12",
+      "executables": [
+        "ZenlessZoneZero.exe"
+      ],
+      "route": "native",
+      "api": "d3d12",
+      "requiredLaunchArgs": [],
+      "excludedLaunchArgs": []
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+[package]
+name = "ssmt-dlss5-backend"
+version = "0.3.0"
+edition = "2021"
+
+[dependencies]
+ssmt-plugin-graphics = { path = "../plugin-graphics" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+semver = "1"
+chrono = "0.4"
+sysinfo = { version = "0.30", default-features = false }
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["stream", "rustls-tls"] }
+zip = "0.6"
+sevenz-rust = { version = "0.6.1", features = ["aes256"] }
+futures-util = "0.3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Registry", "Win32_System_Threading"] }

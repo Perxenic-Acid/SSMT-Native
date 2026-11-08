@@ -1,0 +1,42 @@
+{
+  "gameSettingsModal": {
+    "tabs": {},
+    "common": {},
+    "fields": {
+      "graphicsStack": "Game graphics stack",
+      "graphicsManagedState": "DLSS5 route: {route}; config owner: {owner}",
+      "graphicsInstalledOnly": "Files are installed; this does not prove DLSS5 is active. Last run",
+      "graphicsRuntime_bridge_stopped": "DX11 Bridge failed or stopped; neural rendering is inactive",
+      "graphicsRuntime_feeder_stopped": "Feeder stopped; neural rendering is inactive",
+      "graphicsRuntime_d3d11_interposer_race": "Feeder stopped because DX11 multithread protection is unavailable with a Present interposer; neural rendering is inactive",
+      "graphicsRuntime_nr_evaluated": "Log reports NR activity; check that the frame count keeps increasing",
+      "graphicsRuntime_feature18_evaluated": "ReShade logged a successful Feature 18 evaluation; check that later frame counts keep increasing",
+      "graphicsRuntime_depth_source_mismatch": "The selected depth buffer does not match the display resolution and may be a shadow atlas. Choose a matching candidate in ReShade Add-ons → Generic Depth",
+      "graphicsRuntime_no_dlss_create": "No DLSS creation observed; neural rendering is inactive",
+      "graphicsRuntime_no_nr_evidence": "No evidence of successful neural rendering in the log",
+      "graphicsRuntime_no_log": "No run log found",
+      "graphicsRuntime_log_precedes_install": "No run log for this installation",
+      "graphicsBrokenState": "DLSS5 state is damaged",
+      "graphicsNotManagedState": "No DLSS5 install detected",
+      "graphicsRoutes": "Swapper routes: {routes}",
+      "graphicsApi": "Graphics API",
+      "graphicsApiAuto": "Detect API",
+      "graphicsRoute": "DLSS5 route"
+    },
+    "options": {},
+    "placeholders": {},
+    "actions": {
+      "refreshGraphicsState": "Refresh graphics stack",
+      "installGraphicsRoute": "Install managed route",
+      "migrateGraphicsRoute": "Restore stock install and migrate",
+      "restoreGraphicsRoute": "Restore Swapper files",
+      "openSwapper": "Install in Swapper"
+    },
+    "messages": {
+      "graphicsAntiCheatConfirm": "Swapper detected an anti-cheat component for this game. Installing graphics plugins may be restricted by the game's rules. Continue?",
+      "graphicsInstalled": "Installed DLSS5 route {route} for this game.",
+      "graphicsRestored": "Restored files managed by Swapper."
+    },
+    "other": {}
+  }
+}

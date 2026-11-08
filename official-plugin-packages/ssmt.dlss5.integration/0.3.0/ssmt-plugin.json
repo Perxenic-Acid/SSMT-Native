@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 2,
+  "id": "ssmt.dlss5.integration",
+  "name": "DLSS 5 Integration",
+  "version": "0.3.0",
+  "author": "SSMT",
+  "compatibility": {
+    "ssmt": ">=4.x",
+    "platforms": [
+      "windows-x64"
+    ],
+    "games": [
+      "GIMI",
+      "SRMI",
+      "WWMI",
+      "ZZMI",
+      "ZZMIDX12"
+    ],
+    "pluginApi": ">=1.1.0 <2.0.0"
+  },
+  "contributions": {
+    "runtimePlugins": [],
+    "launcherAdapters": [],
+    "uiPages": [],
+    "externalManagers": [
+      {
+        "id": "dlss5-swapper",
+        "executable": "${external.dlss5-swapper}/DLSS5-Swapper.exe",
+        "workingDirectory": "${external.dlss5-swapper}"
+      }
+    ],
+    "pages": [
+      {
+        "kind": "static",
+        "id": "settings",
+        "title": "DLSS 5",
+        "path": "ui/index.html"
+      }
+    ],
+    "backend": {
+      "executable": "backend/ssmt-dlss5-backend.exe",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "methods": [
+        "inspect_dlss5_game_state",
+        "inspect_dlss5_last_run",
+        "inspect_dlss5_route_options",
+        "dlss5_hot_runtime_status",
+        "gimi_hot_runtime_status",
+        "dlss5_hot_runtime_history",
+        "open_dlss5_swapper",
+        "task.start",
+        "task.read",
+        "task.cancel",
+        "task.active"
+      ],
+      "events": [
+        "launch.describe",
+        "launch.prepare",
+        "launch.commit",
+        "launch.cancel",
+        "cancel",
+        "disabled",
+        "recover"
+      ]
+    }
+  },
+  "externalDependencies": [
+    {
+      "id": "dlss5-swapper",
+      "type": "directory",
+      "downloadHint": "仅用于旧外部管理器；原下载源当前不可用。热注入无需此工具，请使用上方组件配置入口。",
+      "requiredFiles": [
+        "DLSS5-Swapper.exe"
+      ],
+      "requiredFor": [
+        "external-manager"
+      ]
+    },
+    {
+      "id": "dlss5-adapter",
+      "type": "directory",
+      "downloadHint": "仅用于旧外部管理器；SSMT 专用适配器尚未独立发布。热注入无需此依赖。",
+      "requiredFiles": [
+        "src/ssmt-cli.js",
+        "src/core/apply.js"
+      ],
+      "requiredFor": [
+        "external-manager"
+      ]
+    },
+    {
+      "id": "dlss5-payload",
+      "type": "directory",
+      "downloadHint": "仅用于旧外部管理器；热注入所需组件可从上方入口按显卡下载，无需单独配置此目录。",
+      "requiredFiles": [
+        "streamline/nvngx_dlssnr.dll"
+      ],
+      "requiredFor": [
+        "external-manager"
+      ]
+    }
+  ],
+  "permissions": [
+    "process.spawn",
+    "filesystem.read",
+    "filesystem.write",
+    "native.inject",
+    "network",
+    "process.observe",
+    "game.launch"
+  ]
+}

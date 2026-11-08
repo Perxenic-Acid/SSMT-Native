@@ -84,14 +84,6 @@ foreach ($idDirectory in Get-ChildItem -LiteralPath $sourceRoot -Directory) {
                 }
             }
         }
-        foreach ($profile in @($manifest.contributions.graphicsProfiles | Where-Object { $null -ne $_ })) {
-            if ($profile.config) {
-                $profileConfig = Join-Path $versionDirectory.FullName ([string]$profile.config)
-                if (-not (Test-Path -LiteralPath $profileConfig -PathType Leaf)) {
-                    throw "图形配置声明不存在: $($profile.config)"
-                }
-            }
-        }
         if ($DevelopmentPluginId -and -not $LocalBuild) {
             # 本地测试走已有第三方包校验，不能冒充已验证的 Native Release 来源。
             $manifest.id = 'dev.' + $manifest.id

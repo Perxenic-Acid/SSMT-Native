@@ -1,0 +1,19 @@
+{
+  "name": "ssmt-dlss5-integration-ui",
+  "private": true,
+  "version": "0.3.0",
+  "type": "module",
+  "scripts": { "build": "vue-tsc --noEmit && vite build" },
+  "dependencies": {
+    "@element-plus/icons-vue": "^2.3.2",
+    "element-plus": "^2.14.3",
+    "vue": "^3.5.40",
+    "vue-i18n": "^9.14.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.4",
+    "typescript": "~5.6.3",
+    "vite": "^6.4.3",
+    "vue-tsc": "^2.2.12"
+  }
+}

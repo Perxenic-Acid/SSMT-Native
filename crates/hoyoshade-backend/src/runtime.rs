@@ -46,6 +46,32 @@ pub fn prepare(
     context: &Value,
     payload: &Value,
 ) -> Result<Value, String> {
+    if payload["launchContext"]["existingDlls"]
+        .as_array()
+        .is_some_and(|paths| {
+            paths.iter().any(|path| {
+                path.as_str()
+                    .and_then(|path| {
+                        Path::new(path).file_name()
+                    })
+                    .is_some_and(|name| {
+                        name.to_string_lossy()
+                            .eq_ignore_ascii_case(
+                                "dxgi.dll",
+                            )
+                            || name
+                                .to_string_lossy()
+                                .eq_ignore_ascii_case(
+                                    "d3d11.dll",
+                                )
+                    })
+            })
+        })
+    {
+        return Err(
+            "热注入组件与额外图形代理 DLL 冲突".into()
+        );
+    }
     let policy = Policy::load(context)?;
     let executable_path = executable(context, payload)?;
     let executable = executable_path.as_path();
