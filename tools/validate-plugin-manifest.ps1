@@ -154,8 +154,26 @@ $contributions = $manifest.contributions
 Assert-Object $contributions 'contributions' @(
     'hostExtensions', 'runtimePlugins', 'injectedDlls',
     'launcherAdapters', 'externalManagers', 'uiPages', 'pages', 'launchHooks',
-    'dataDirectories', 'migrations', 'graphicsProfiles'
+    'dataDirectories', 'migrations', 'graphicsProfiles', 'backend'
 )
+
+if ($null -ne $contributions.PSObject.Properties['backend']) {
+    $backend = $contributions.backend
+    Assert-Object $backend 'contributions.backend' @('executable', 'sha256', 'methods', 'events') @('executable', 'sha256')
+    Assert-PackagePath $backend.executable 'backend.executable'
+    if (-not $backend.executable.EndsWith('.exe', [StringComparison]::OrdinalIgnoreCase) -or $backend.sha256 -notmatch '^[0-9a-fA-F]{64}$') { Fail 'invalid backend executable or SHA256' }
+    if ('process.spawn' -notin $manifest.permissions) { Fail 'backend requires process.spawn' }
+    if ($null -ne $backend.PSObject.Properties['methods']) {
+        foreach ($method in (Assert-Array $backend.methods 'backend.methods')) { Assert-PluginId $method 'backend.methods[]' }
+        if ($backend.methods.Count -gt 64) { Fail 'too many backend methods' }
+    }
+    if ($null -ne $backend.PSObject.Properties['events']) {
+        foreach ($event in (Assert-Array $backend.events 'backend.events')) {
+            if ($event -notin @('prepare', 'cancel', 'disabled', 'recover', 'launch.describe', 'launch.prepare', 'launch.commit', 'launch.cancel')) { Fail 'unsupported backend event' }
+        }
+        if ($backend.events.Count -gt 8) { Fail 'too many backend events' }
+    }
+}
 
 if ($null -ne $contributions.PSObject.Properties['hostExtensions']) {
     foreach ($extension in (Assert-Array $contributions.hostExtensions 'contributions.hostExtensions')) {
@@ -186,8 +204,11 @@ if ($null -ne $contributions.PSObject.Properties['runtimePlugins']) {
 
 if ($null -ne $contributions.PSObject.Properties['injectedDlls']) {
     foreach ($injected in (Assert-Array $contributions.injectedDlls 'contributions.injectedDlls')) {
-        Assert-Object $injected 'injectedDlls[]' @('path', 'sha256') @('path')
+        Assert-Object $injected 'injectedDlls[]' @('path', 'sha256', 'executableNames') @('path')
         Assert-PackagePath $injected.path 'injectedDlls[].path'
+        if ($null -ne $injected.PSObject.Properties['executableNames']) {
+            foreach ($game in (Assert-Array $injected.executableNames 'injectedDlls[].executableNames')) { Assert-String $game 'injectedDlls[].executableNames[]' }
+        }
         if (-not $injected.path.ToLowerInvariant().EndsWith('.dll')) {
             Fail 'injectedDlls[].path must end with .dll'
         }

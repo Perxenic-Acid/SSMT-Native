@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 2,
+  "id": "ssmt.hoyoshade.bridge",
+  "name": "HoYoShade Bridge",
+  "version": "0.2.0",
+  "author": "SSMT",
+  "compatibility": {
+    "ssmt": ">=4.2.2",
+    "platforms": [
+      "windows-x64"
+    ],
+    "games": [
+      "GIMI",
+      "SRMI",
+      "ZZMI",
+      "ZZMIDX12",
+      "HIMI"
+    ],
+    "pluginApi": ">=1.1.0 <2.0.0"
+  },
+  "contributions": {
+    "backend": {
+      "executable": "backend/ssmt-hoyoshade-backend.exe",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "methods": [
+        "status.read"
+      ],
+      "events": [
+        "launch.describe",
+        "launch.prepare",
+        "launch.cancel",
+        "cancel",
+        "disabled",
+        "recover"
+      ]
+    },
+    "pages": [
+      {
+        "kind": "static",
+        "id": "settings",
+        "title": "HoYoShade",
+        "path": "ui/index.html"
+      }
+    ]
+  },
+  "externalDependencies": [
+    {
+      "id": "hoyoshade",
+      "type": "directory",
+      "downloadUrl": "https://github.com/DuolaD/HoYoShade/releases",
+      "downloadHint": "下载并解压 HoYoShade，按发布说明补齐效果库，再选择包含所列文件的目录。",
+      "requiredFiles": [
+        "inject.exe",
+        "ReShade64.dll",
+        "ReShade.ini",
+        "LauncherResource/INIBuild.exe",
+        "InjectResource",
+        "reshade-shaders",
+        "Presets"
+      ]
+    }
+  ],
+  "permissions": [
+    "process.spawn",
+    "process.observe",
+    "game.launch",
+    "filesystem.read",
+    "filesystem.write",
+    "native.inject"
+  ]
+}

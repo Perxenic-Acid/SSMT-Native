@@ -1,0 +1,11 @@
+[package]
+name = "ssmt-hoyoshade-backend"
+version = "0.2.0"
+edition = "2021"
+
+[dependencies]
+ssmt-plugin-graphics = { path = "../plugin-graphics" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sysinfo = { version = "0.30", default-features = false }

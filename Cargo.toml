@@ -2,6 +2,9 @@
 resolver = "3"
 
 members = [
+    "crates/hoyoshade-backend",
+    "crates/plugin-graphics",
+    "crates/player-tweaks-backend",
     "crates/plugin-api",
     "crates/test-plugin",
     "crates/host-probe",

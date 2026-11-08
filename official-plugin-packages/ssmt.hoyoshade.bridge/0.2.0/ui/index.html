@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HoYoShade</title>
+<style>
+:root{color-scheme:dark;font:15px/1.7 system-ui,sans-serif;background:#151922;color:#e7eaf0}body{max-width:780px;margin:auto;padding:24px}h1{font-size:24px}p{color:#b8c0d0}button{padding:9px 22px;border:0;border-radius:7px;background:#90b9ff;color:#101928;cursor:pointer}button:disabled{opacity:.5}#status{white-space:pre-wrap;overflow-wrap:anywhere}.error{color:#ffb6b6}
+</style>
+<h1>HoYoShade</h1>
+<p>在插件详情的外部资源设置中选择 HoYoShade 解压目录。启动时使用插件自己的配置目录，保留教程、按键和效果参数；也可以在游戏内打开 ReShade 调整效果。</p>
+<p>与其他插件共享 ReShade 时，效果配置由插件共同提供。游戏目录中已有图形代理或指向其他安装的 ReShade 配置时，本插件会报告冲突并保留原文件。</p>
+<button id="refresh">检查资源</button><p id="status" role="status">正在检查…</p>
+<script type="module">
+let sequence=0;const pending=new Map();
+window.addEventListener('message',event=>{if(event.source!==parent||event.data?.type!=='ssmt:capability-response'||event.data.protocolVersion!==1)return;const task=pending.get(event.data.requestId);if(!task)return;clearTimeout(task.timer);pending.delete(event.data.requestId);event.data.ok?task.resolve(event.data.value):task.reject(Error(event.data.errorMessage||'插件调用失败'))});
+function call(method){return new Promise((resolve,reject)=>{const requestId=`hoyoshade-${++sequence}`;const timer=setTimeout(()=>{pending.delete(requestId);reject(Error('宿主响应超时'))},125000);pending.set(requestId,{resolve,reject,timer});parent.postMessage({type:'ssmt:capability-request',protocolVersion:1,requestId,capability:'plugin.backend.request',payload:{method,payload:null}},'*')})}
+const status=document.getElementById('status'),button=document.getElementById('refresh');
+async function refresh(){button.disabled=true;try{const value=await call('status.read');status.classList.toggle('error',!value.ready);status.textContent=value.ready?`资源目录已就绪：${value.path}\n下次启动游戏时应用。`:`资源尚未就绪：${value.error}`}catch(error){status.classList.add('error');status.textContent=String(error)}finally{button.disabled=false}}
+button.addEventListener('click',refresh);await refresh();
+</script></html>

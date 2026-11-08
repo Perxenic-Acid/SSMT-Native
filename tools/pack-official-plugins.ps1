@@ -164,6 +164,12 @@ foreach ($idDirectory in Get-ChildItem -LiteralPath $sourceRoot -Directory) {
             # hash from the bytes that actually enter this package so a fresh
             # CI rebuild does not invalidate the manifest's optional checksum.
             $manifestChanged = $false
+            if ($null -ne $manifest.contributions.backend) {
+                $backendPath = Join-Path $stagingRoot ([string]$manifest.contributions.backend.executable)
+                if (-not (Test-Path -LiteralPath $backendPath -PathType Leaf)) { throw '缺少插件后台构建产物' }
+                $manifest.contributions.backend.sha256 = (Get-FileHash -LiteralPath $backendPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                $manifestChanged = $true
+            }
             foreach ($injected in @($manifest.contributions.injectedDlls)) {
                 if ($null -eq $injected) { continue }
                 $relative = [string]$injected.path

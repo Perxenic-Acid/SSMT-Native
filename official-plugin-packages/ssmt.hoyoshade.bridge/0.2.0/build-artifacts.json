@@ -1,0 +1,8 @@
+{
+  "files": [
+    {
+      "source": "ssmt-hoyoshade-backend.exe",
+      "destination": "backend/ssmt-hoyoshade-backend.exe"
+    }
+  ]
+}
