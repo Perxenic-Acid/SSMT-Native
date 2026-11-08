@@ -48,6 +48,50 @@ foreach ($idDirectory in Get-ChildItem -LiteralPath $sourceRoot -Directory) {
             throw "插件清单与目录不一致: $manifestPath"
         }
         & (Join-Path $PSScriptRoot 'validate-plugin-manifest.ps1') -Path $manifestPath | Out-Null
+        foreach ($page in @($manifest.contributions.pages | Where-Object { $null -ne $_ })) {
+            if ($page.path) {
+                $pagePath = Join-Path $versionDirectory.FullName ([string]$page.path)
+                if (-not (Test-Path -LiteralPath $pagePath -PathType Leaf)) {
+                    throw "插件声明页面不存在: $($page.path)"
+                }
+            }
+            if ($page.kind -eq 'local-service' -and $page.service.executable -notmatch '\$\{') {
+                $executablePath = Join-Path $versionDirectory.FullName ([string]$page.service.executable)
+                if (-not (Test-Path -LiteralPath $executablePath -PathType Leaf)) {
+                    throw "本地服务程序不存在: $($page.service.executable)"
+                }
+            }
+        }
+        foreach ($hook in @($manifest.contributions.launchHooks | Where-Object { $null -ne $_ })) {
+            foreach ($action in @($hook.actions | Where-Object { $null -ne $_ })) {
+                if ($action.type -ne 'file-copy') { continue }
+                $sourcePath = Join-Path $versionDirectory.FullName ([string]$action.source)
+                if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+                    throw "启动计划源文件不存在: $($action.source)"
+                }
+                $actualHash = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+                if ($actualHash -ne ([string]$action.sha256).ToLowerInvariant()) {
+                    throw "启动计划源文件哈希不匹配: $($action.source)"
+                }
+            }
+        }
+        foreach ($data in @($manifest.contributions.dataDirectories | Where-Object { $null -ne $_ })) {
+            $seed = if ($null -eq $data.PSObject.Properties['seedFromPackage']) { $true } else { $data.seedFromPackage }
+            if ($seed) {
+                $dataPath = Join-Path $versionDirectory.FullName ([string]$data.packagePath)
+                if (-not (Test-Path -LiteralPath $dataPath -PathType Container)) {
+                    throw "插件声明数据目录不存在: $($data.packagePath)"
+                }
+            }
+        }
+        foreach ($profile in @($manifest.contributions.graphicsProfiles | Where-Object { $null -ne $_ })) {
+            if ($profile.config) {
+                $profileConfig = Join-Path $versionDirectory.FullName ([string]$profile.config)
+                if (-not (Test-Path -LiteralPath $profileConfig -PathType Leaf)) {
+                    throw "图形配置声明不存在: $($profile.config)"
+                }
+            }
+        }
         if ($DevelopmentPluginId -and -not $LocalBuild) {
             # 本地测试走已有第三方包校验，不能冒充已验证的 Native Release 来源。
             $manifest.id = 'dev.' + $manifest.id

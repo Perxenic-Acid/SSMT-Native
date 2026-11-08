@@ -1,0 +1,10 @@
+{
+  "publish": true,
+  "sourcePaths": [
+    "secondary-motion-ui",
+    "tools/build-secondary-motion-ui.ps1",
+    "tools/sources/secondary-motion.json",
+    "tools/build-secondary-motion.ps1",
+    "official-plugin-packages/ssmt.secondary-motion/3.3.4"
+  ]
+}

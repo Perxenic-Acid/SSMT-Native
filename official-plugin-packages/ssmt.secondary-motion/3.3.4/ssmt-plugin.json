@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 2,
+  "id": "ssmt.secondary-motion",
+  "name": "Secondary Motion",
+  "version": "3.3.4",
+  "author": "Sp1cHless / SSMT integration",
+  "compatibility": {
+    "ssmt": ">=4.2.0",
+    "pluginApi": ">=1.0.0 <2.0.0",
+    "platforms": [
+      "windows-x64"
+    ],
+    "games": [
+      "EFMI"
+    ]
+  },
+  "contributions": {
+    "pages": [
+      {
+        "kind": "static",
+        "id": "settings",
+        "title": "Secondary Motion",
+        "path": "ui/index.html"
+      }
+    ],
+    "injectedDlls": [
+      {
+        "path": "plugin/sbm.dll",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    ],
+    "dataDirectories": [
+      {
+        "id": "SecondaryMotion",
+        "packagePath": "SecondaryMotion",
+        "seedFromPackage": true,
+        "mirrorOnLaunch": true
+      }
+    ]
+  },
+  "externalDependencies": [],
+  "permissions": [
+    "native.inject",
+    "filesystem.read",
+    "filesystem.write",
+    "process.observe"
+  ]
+}
